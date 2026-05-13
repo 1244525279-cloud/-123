@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Volume2, UserCircle2, X, Mic, MicOff, Save, Upload } from 'lucide-react';
+import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AVAILABLE_SOUNDS, SoundDef, engine } from './audio';
+import { AUDIO_STYLES, AVAILABLE_SOUNDS, AudioStyleId, SoundDef, engine } from './audio';
 import { cn } from './lib/utils';
 
 export default function App() {
@@ -9,6 +9,7 @@ export default function App() {
   const [slots, setSlots] = useState<(SoundDef | null)[]>(new Array(7).fill(null));
   const [mutedSlots, setMutedSlots] = useState<boolean[]>(new Array(7).fill(false));
   const [activeStep, setActiveStep] = useState(0);
+  const [activeStyle, setActiveStyle] = useState<AudioStyleId>('default');
   
   // Recording & Upload states
   const [isRecording, setIsRecording] = useState(false);
@@ -89,6 +90,11 @@ export default function App() {
     newSlots[index] = null;
     setSlots(newSlots);
     engine.setSlots(newSlots);
+  };
+
+  const handleStyleChange = (styleId: AudioStyleId) => {
+    setActiveStyle(styleId);
+    engine.setStyle(styleId);
   };
 
   // Recording & Upload Logic
@@ -227,7 +233,7 @@ export default function App() {
           <h1 className="text-lg font-bold tracking-tight text-white uppercase">Flux Audio Workstation</h1>
         </div>
 
-        <div className="flex items-center gap-6 text-xs font-medium uppercase tracking-widest opacity-60">
+        <div className="hidden md:flex items-center gap-6 text-xs font-medium uppercase tracking-widest opacity-60">
           <div>BPM: 120</div>
           <div>KEY: C MAJ</div>
           <div>STEP: {activeStep + 1}/16</div>
@@ -246,7 +252,37 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 w-full flex flex-col p-6 gap-6 overflow-hidden">
+      <main className="flex-1 w-full flex flex-col p-6 gap-5 overflow-hidden">
+        <section className="shrink-0 flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-4 h-4 text-zinc-500" />
+            <h2 className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">One-Tap Style</h2>
+            <div className="h-px flex-1 bg-zinc-800"></div>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+            {AUDIO_STYLES.map((style) => {
+              const selected = activeStyle === style.id;
+
+              return (
+                <button
+                  key={style.id}
+                  type="button"
+                  onClick={() => handleStyleChange(style.id)}
+                  className={cn(
+                    "h-9 shrink-0 rounded border px-3 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2",
+                    selected
+                      ? "border-white/30 bg-white/15 text-white shadow-[0_0_18px_rgba(255,255,255,0.08)]"
+                      : "border-white/5 bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300"
+                  )}
+                  title={`Switch to ${style.name} without changing the rhythm`}
+                >
+                  <span className={cn("h-2 w-2 rounded-full", style.accent)}></span>
+                  {style.name}
+                </button>
+              )
+            })}
+          </div>
+        </section>
         
         {/* TOP: Performance Modules (Drop Zones) */}
         <section className="flex-1 bg-zinc-900/50 rounded-2xl border border-white/5 p-8 flex flex-col overflow-hidden">
