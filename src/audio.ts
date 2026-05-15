@@ -30,6 +30,7 @@ export type AudioStyleId =
   | 'synthwave'
   | 'trap'
   | 'chiptune'
+  | 'piano'
   | 'experimental';
 
 export interface AudioStyle {
@@ -45,6 +46,7 @@ export const AUDIO_STYLES: AudioStyle[] = [
   { id: 'synthwave', name: 'Synthwave', accent: 'bg-pink-500' },
   { id: 'trap', name: 'Trap 808', accent: 'bg-violet-500' },
   { id: 'chiptune', name: 'Chiptune', accent: 'bg-cyan-500' },
+  { id: 'piano', name: 'Piano', accent: 'bg-blue-400' },
   { id: 'experimental', name: 'Experimental', accent: 'bg-fuchsia-500' },
 ];
 
@@ -496,6 +498,26 @@ export class ProjectEngine {
       return;
     }
 
+    if (styleId === 'piano') {
+      const body = ctx.createOscillator();
+      const sparkle = ctx.createOscillator();
+      const mix = ctx.createGain();
+      const root = type === 'laser' ? 988 : type === 'train' ? 196 : 523;
+      body.type = 'triangle';
+      sparkle.type = 'sine';
+      body.frequency.setValueAtTime(root * rateMultiplier, time);
+      sparkle.frequency.setValueAtTime(root * 2.01 * rateMultiplier, time);
+      body.connect(mix);
+      sparkle.connect(mix);
+      const { filter } = this.connectFiltered(mix, time, channelIndex, 0.18, 0.42, 'lowpass', 4200, 1.1);
+      filter.frequency.exponentialRampToValueAtTime(1200, time + 0.36);
+      body.start(time);
+      sparkle.start(time);
+      body.stop(time + 0.42);
+      sparkle.stop(time + 0.18);
+      return;
+    }
+
     if (styleId === 'experimental') {
       const root = type === 'laser' ? 880 : type === 'train' ? 110 : 330;
       const carrier = ctx.createOscillator();
@@ -603,6 +625,32 @@ export class ProjectEngine {
       return;
     }
 
+    if (styleId === 'piano') {
+      if (type === 'kick') {
+        const thump = ctx.createOscillator();
+        thump.type = 'sine';
+        thump.frequency.setValueAtTime(108, time);
+        thump.frequency.exponentialRampToValueAtTime(44, time + 0.24);
+        this.connectFiltered(thump, time, channelIndex, 0.62, 0.34, 'lowpass', 520, 0.8);
+        thump.start(time);
+        thump.stop(time + 0.34);
+      } else {
+        const knock = ctx.createOscillator();
+        const noise = ctx.createBufferSource();
+        const mix = ctx.createGain();
+        knock.type = 'triangle';
+        knock.frequency.setValueAtTime(type === 'hihat' ? 1760 : 740, time);
+        noise.buffer = this.makeNoise(type === 'hihat' ? 0.035 : 0.09);
+        knock.connect(mix);
+        noise.connect(mix);
+        this.connectFiltered(mix, time, channelIndex, type === 'hihat' ? 0.11 : 0.24, type === 'hihat' ? 0.05 : 0.14, 'bandpass', type === 'hihat' ? 5200 : 1200, 2.4);
+        knock.start(time);
+        noise.start(time);
+        knock.stop(time + 0.12);
+      }
+      return;
+    }
+
     if (styleId === 'experimental') {
       const hit = ctx.createOscillator();
       const bell = ctx.createOscillator();
@@ -701,6 +749,31 @@ export class ProjectEngine {
       });
       const { filter } = this.connectFiltered(mix, time, channelIndex, isBass ? 0.42 : 0.2, isBass ? 0.42 : 0.9, 'lowpass', isBass ? 760 : 3400, 1.1);
       filter.frequency.exponentialRampToValueAtTime(isBass ? 360 : 1400, time + (isBass ? 0.36 : 0.82));
+      return;
+    }
+
+    if (styleId === 'piano') {
+      const hammer = ctx.createOscillator();
+      const tone = ctx.createOscillator();
+      const overtone = ctx.createOscillator();
+      const mix = ctx.createGain();
+      hammer.type = 'triangle';
+      tone.type = 'sine';
+      overtone.type = 'triangle';
+      hammer.frequency.setValueAtTime(freq * (isBass ? 2 : 1.01), time);
+      tone.frequency.setValueAtTime(freq, time);
+      overtone.frequency.setValueAtTime(freq * (isBass ? 1.5 : 2.01), time);
+      hammer.connect(mix);
+      tone.connect(mix);
+      overtone.connect(mix);
+      const duration = isBass ? 0.72 : 1.1;
+      const { filter, gain } = this.connectFiltered(mix, time, channelIndex, isBass ? 0.32 : 0.18, duration, 'lowpass', isBass ? 1400 : 5200, 1);
+      gain.gain.setValueAtTime(isBass ? 0.22 : 0.12, time + 0.08);
+      filter.frequency.exponentialRampToValueAtTime(isBass ? 420 : 1600, time + duration * 0.75);
+      [hammer, tone, overtone].forEach(source => {
+        source.start(time);
+        source.stop(time + duration);
+      });
       return;
     }
 
