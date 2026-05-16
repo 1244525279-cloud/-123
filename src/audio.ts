@@ -17,7 +17,7 @@ export interface SoundDef {
   name: string;
   category: Category;
   color: string;
-  pattern: { note?: number; drum?: string; exp?: string }[];
+  pattern: { note?: number | number[]; drum?: string; exp?: string }[];
   buffer?: AudioBuffer; // For recorded sounds
   loopMode?: 'fast' | 'full';
   playMode?: 'pattern' | 'buffer'; // New: 'pattern' for sequenced notes, 'buffer' for direct audio playback
@@ -358,7 +358,11 @@ export class ProjectEngine {
       } else if (stepData.drum) {
         this.playDrum(stepData.drum, time, index);
       } else if (stepData.note) {
-        this.playSynth(stepData.note, slot.category, time, index);
+        if (Array.isArray(stepData.note)) {
+          stepData.note.forEach((note) => this.playSynth(note, slot.category, time, index));
+        } else {
+          this.playSynth(stepData.note, slot.category, time, index);
+        }
       } else if (stepData.exp) {
         this.playExperimental(stepData.exp, time, index);
       }
