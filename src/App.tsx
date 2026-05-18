@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, Save, RotateCcw, Shuffle, Keyboard, Circle, Wand2 } from 'lucide-react';
+import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, Save, RotateCcw, Shuffle, Keyboard, Circle, Wand2, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AUDIO_STYLES, AVAILABLE_SOUNDS, AudioStyleId, SoundDef, engineManager, FxParams, defaultFx, KEYBOARD_NOTES } from './audio';
 import { cn } from './lib/utils';
@@ -38,6 +38,8 @@ interface StylePreset {
   fxSlots: FxParams[];
   masterFx: FxParams;
 }
+
+type ColorMode = 'night' | 'day';
 
 const makeFx = (overrides: Partial<FxParams> = {}): FxParams => ({
   ...defaultFx(),
@@ -314,6 +316,7 @@ const STYLE_PRESETS: StylePreset[] = [
 ];
 
 const STORAGE_KEY = 'codex-music-workbench-v1';
+const COLOR_MODE_STORAGE_KEY = 'codex-music-workbench-color-mode';
 
 const findSound = (id: string) => AVAILABLE_SOUNDS.find((sound) => sound.id === id) ?? null;
 
@@ -326,7 +329,7 @@ const audioStyleForPreset = (presetId: string): AudioStyleId => {
   return 'default';
 };
 
-const createStyleTab = (preset: StylePreset, id = 'tab-1'): TabData => {
+const createStyleTab = (preset: StylePreset, id = 'tab-1', styleId: AudioStyleId = audioStyleForPreset(preset.id)): TabData => {
   const slots = preset.slotIds.map(findSound);
 
   return {
@@ -336,13 +339,18 @@ const createStyleTab = (preset: StylePreset, id = 'tab-1'): TabData => {
     mutedSlots: new Array(7).fill(false),
     fxSlots: preset.fxSlots,
     masterFx: preset.masterFx,
-    styleId: audioStyleForPreset(preset.id),
+    styleId,
     isPlaying: false,
     activeStep: 0
   };
 };
 
 const createCodexSongTab = (): TabData => createStyleTab(STYLE_PRESETS[0]);
+
+const hydrateColorMode = (): ColorMode => {
+  if (typeof window === 'undefined') return 'night';
+  return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'day' ? 'day' : 'night';
+};
 
 const hydrateSavedTabs = (): { tabs: TabData[]; styleId: string } | null => {
   if (typeof window === 'undefined') return null;
@@ -374,6 +382,7 @@ export default function App() {
   const [tabs, setTabs] = useState<TabData[]>(() => initialWorkbench?.tabs ?? [createCodexSongTab()]);
   const [selectedStyleId, setSelectedStyleId] = useState(initialWorkbench?.styleId ?? STYLE_PRESETS[0].id);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'loaded'>('idle');
+  const [colorMode, setColorMode] = useState<ColorMode>(hydrateColorMode);
   
   const [activeTabId, setActiveTabId] = useState('tab-1');
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
@@ -427,6 +436,10 @@ export default function App() {
   }, [tabs, selectedStyleId]);
 
   useEffect(() => {
+    window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, colorMode);
+  }, [colorMode]);
+
+  useEffect(() => {
     if (!isKeyboardVisible) return;
 
     const handleKeydown = (e: KeyboardEvent) => {
@@ -466,6 +479,7 @@ export default function App() {
 
   const syncProjectEngine = (tab: TabData) => {
     const engine = engineManager.getProject(tab.id);
+    engine.setStyle(tab.styleId);
     engine.setSlots(tab.slots);
     engine.setMutedSlots(tab.mutedSlots);
     tab.fxSlots.forEach((fx, index) => engine.setFxParams(index, fx));
@@ -499,7 +513,7 @@ export default function App() {
 
   const applyStylePreset = (styleId: string) => {
     const preset = STYLE_PRESETS.find((style) => style.id === styleId) ?? STYLE_PRESETS[0];
-    const styledTab = createStyleTab(preset, activeTab.id);
+    const styledTab = createStyleTab(preset, activeTab.id, activeTab.styleId);
     const nextTab = {
       ...styledTab,
       name: preset.name,
@@ -984,21 +998,40 @@ export default function App() {
 
   const workbenchStyle = {
     background:
-      `radial-gradient(circle at 50% 20%, ${activeStyle.panel}, transparent 36%), ` +
-      `linear-gradient(135deg, ${activeStyle.panel}, rgba(24, 24, 27, 0.5))`,
-    borderColor: activeTab.isPlaying ? activeStyle.accent : 'rgba(255,255,255,0.05)',
+      colorMode === 'day'
+        ? `radial-gradient(circle at 50% 18%, ${activeStyle.panel}, transparent 40%), linear-gradient(135deg, rgba(255,255,255,0.96), rgba(245,247,250,0.86))`
+        : `radial-gradient(circle at 50% 20%, ${activeStyle.panel}, transparent 36%), linear-gradient(135deg, ${activeStyle.panel}, rgba(24, 24, 27, 0.5))`,
+    borderColor: activeTab.isPlaying
+      ? activeStyle.accent
+      : colorMode === 'day'
+        ? 'rgba(15,23,42,0.1)'
+        : 'rgba(255,255,255,0.05)',
   } as React.CSSProperties;
+  const isDayMode = colorMode === 'day';
+  const softButtonClass = isDayMode
+    ? "bg-slate-900/5 hover:bg-slate-900/10 text-slate-700 border-slate-900/10"
+    : "bg-white/5 hover:bg-white/10 text-zinc-300 border-white/5";
+  const mutedTextClass = isDayMode ? "text-slate-500" : "text-zinc-500";
+  const hairlineClass = isDayMode ? "bg-slate-200" : "bg-zinc-800";
 
   return (
     <div
-      className="h-screen bg-[#0c0c0e] text-zinc-300 font-sans flex flex-col overflow-hidden select-none transition-colors duration-300"
+      className={cn(
+        "h-screen font-sans flex flex-col overflow-hidden select-none transition-colors duration-300",
+        isDayMode ? "bg-slate-100 text-slate-700" : "bg-[#0c0c0e] text-zinc-300"
+      )}
       style={{
-        background: `linear-gradient(180deg, #0c0c0e 0%, #101014 58%, ${activeStyle.panel} 100%)`,
+        background: isDayMode
+          ? `linear-gradient(180deg, #f8fafc 0%, #eef4f8 58%, rgba(255,255,255,0.8) 100%)`
+          : `linear-gradient(180deg, #0c0c0e 0%, #101014 58%, ${activeStyle.panel} 100%)`,
       }}
     >
       
       {/* Header / Tabs */}
-      <header className="px-6 flex flex-shrink-0 items-end justify-between border-b border-white/5 bg-black/40 backdrop-blur-md z-10 w-full pt-4">
+      <header className={cn(
+        "px-6 flex flex-shrink-0 items-end justify-between border-b backdrop-blur-md z-10 w-full pt-4",
+        isDayMode ? "border-slate-900/10 bg-white/80" : "border-white/5 bg-black/40"
+      )}>
         <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-0 w-full md:w-auto">
           {tabs.map((tab) => (
              <div 
@@ -1008,14 +1041,16 @@ export default function App() {
                onMouseLeave={handleTabMouseLeave}
                className={cn(
                  "group relative flex items-center gap-3 px-4 py-3 rounded-t-lg font-bold tracking-widest uppercase text-[10px] cursor-pointer transition-all border border-b-0 min-w-max",
-                 activeTabId === tab.id ? "bg-zinc-900 border-white/10 text-white" : "bg-black/20 border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-black/40"
+                 activeTabId === tab.id
+                   ? isDayMode ? "bg-white border-slate-900/10 text-slate-950 shadow-sm" : "bg-zinc-900 border-white/10 text-white"
+                   : isDayMode ? "bg-slate-900/5 border-transparent text-slate-500 hover:text-slate-900 hover:bg-white/70" : "bg-black/20 border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-black/40"
                )}
              >
                 <button 
                   onClick={(e) => togglePlayTab(e, tab.id)}
                   className={cn(
                     "w-5 h-5 rounded flex items-center justify-center transition-colors",
-                    tab.isPlaying ? "bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]" : "bg-white/10 text-white hover:bg-white/20"
+                    tab.isPlaying ? "bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]" : isDayMode ? "bg-slate-900/10 text-slate-700 hover:bg-slate-900/15" : "bg-white/10 text-white hover:bg-white/20"
                   )}
                 >
                   {tab.isPlaying ? <Square className="w-2.5 h-2.5" fill="currentColor"/> : <Play className="w-2.5 h-2.5 ml-0.5" fill="currentColor"/>}
@@ -1035,7 +1070,10 @@ export default function App() {
 
           <button 
              onClick={addNewTab}
-             className="px-4 py-3 rounded-t-lg bg-black/20 hover:bg-black/40 text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest text-[10px] font-bold border border-transparent flex items-center gap-1.5 ml-2"
+             className={cn(
+               "px-4 py-3 rounded-t-lg transition-colors uppercase tracking-widest text-[10px] font-bold border border-transparent flex items-center gap-1.5 ml-2",
+               isDayMode ? "bg-slate-900/5 hover:bg-white/80 text-slate-500 hover:text-slate-900" : "bg-black/20 hover:bg-black/40 text-zinc-500 hover:text-zinc-300"
+             )}
           >
              <Plus size={12} strokeWidth={3} />
              New
@@ -1046,7 +1084,7 @@ export default function App() {
              aria-label="Open keyboard"
              className={cn(
                "w-10 h-10 rounded-full flex items-center justify-center transition-all border border-white/10 shadow-sm",
-               isKeyboardVisible ? "bg-emerald-500 text-white" : "bg-black/20 text-zinc-400 hover:bg-white/10 hover:text-white"
+               isKeyboardVisible ? "bg-emerald-500 text-white" : isDayMode ? "bg-slate-900/5 text-slate-600 hover:bg-white hover:text-slate-950 border-slate-900/10" : "bg-black/20 text-zinc-400 hover:bg-white/10 hover:text-white"
              )}
           >
              <Keyboard className="w-5 h-5" />
@@ -1054,15 +1092,16 @@ export default function App() {
         </div>
 
         <div className="hidden md:flex items-center gap-3 text-[10px] font-medium uppercase tracking-widest pb-3 h-full mb-1">
-          <div className="flex items-center gap-2 bg-white/5 px-2 py-1.5 rounded border border-white/5">
-            <span className="text-zinc-500">Style</span>
+          <div className={cn("flex items-center gap-2 px-2 py-1.5 rounded border", isDayMode ? "bg-slate-900/5 border-slate-900/10" : "bg-white/5 border-white/5")}>
+            <span className={mutedTextClass}>Preset</span>
             <select
               value={selectedStyleId}
               onChange={(e) => applyStylePreset(e.target.value)}
-              className="bg-transparent text-white text-[10px] font-bold uppercase tracking-widest outline-none"
+              className={cn("bg-transparent text-[10px] font-bold uppercase tracking-widest outline-none", isDayMode ? "text-slate-950" : "text-white")}
+              title="Switch loops, FX, and visual energy while keeping the current Sound Style"
             >
               {STYLE_PRESETS.map((style) => (
-                <option key={style.id} value={style.id} className="bg-zinc-900 text-white">
+                <option key={style.id} value={style.id} className={isDayMode ? "bg-white text-slate-950" : "bg-zinc-900 text-white"}>
                   {style.name}
                 </option>
               ))}
@@ -1070,48 +1109,58 @@ export default function App() {
           </div>
           <button
             onClick={shuffleActiveTab}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/5 transition-colors"
+            className={cn("flex items-center gap-1.5 px-2 py-1.5 rounded border transition-colors", softButtonClass)}
           >
             <Shuffle size={11} />
             Shuffle
           </button>
           <button
             onClick={() => persistWorkbench()}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/5 transition-colors"
+            className={cn("flex items-center gap-1.5 px-2 py-1.5 rounded border transition-colors", softButtonClass)}
           >
             <Save size={11} />
             {saveStatus === 'saved' ? 'Saved' : 'Save'}
           </button>
           <button
             onClick={loadWorkbench}
-            className="px-2 py-1.5 rounded bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/5 transition-colors"
+            className={cn("px-2 py-1.5 rounded border transition-colors", softButtonClass)}
           >
             {saveStatus === 'loaded' ? 'Loaded' : 'Load'}
           </button>
           <button
             onClick={resetWorkbench}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/5 transition-colors"
+            className={cn("flex items-center gap-1.5 px-2 py-1.5 rounded border transition-colors", softButtonClass)}
           >
             <RotateCcw size={11} />
             Reset
           </button>
-          <div className="flex gap-4 bg-white/5 px-3 py-1.5 rounded text-white flex-shrink-0 opacity-70">
+          <button
+            onClick={() => setColorMode(prev => prev === 'night' ? 'day' : 'night')}
+            className={cn("flex items-center gap-1.5 px-2 py-1.5 rounded border transition-colors", softButtonClass)}
+            aria-label={isDayMode ? 'Switch to night mode' : 'Switch to day mode'}
+            title={isDayMode ? 'Switch to night mode' : 'Switch to day mode'}
+          >
+            {isDayMode ? <Moon size={11} /> : <Sun size={11} />}
+            {isDayMode ? 'Night' : 'Day'}
+          </button>
+          <div className={cn("flex gap-4 px-3 py-1.5 rounded flex-shrink-0 opacity-80", isDayMode ? "bg-slate-900/5 text-slate-800" : "bg-white/5 text-white")}>
              <span>BPM: 120</span>
-             <span className="text-white/20">|</span>
+             <span className={isDayMode ? "text-slate-300" : "text-white/20"}>|</span>
              <span>KEY: C MAJ</span>
-             <span className="text-white/20">|</span>
+             <span className={isDayMode ? "text-slate-300" : "text-white/20"}>|</span>
              <span className="w-20 text-right">STEP: {activeTab.activeStep + 1}/16</span>
           </div>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 w-full flex flex-col p-6 gap-5 overflow-hidden">
+      <main className="min-h-0 flex-1 w-full flex flex-col p-6 gap-5 overflow-hidden">
         <section className="shrink-0 flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <Wand2 className="w-4 h-4 text-zinc-500" />
-            <h2 className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">One-Tap Style</h2>
-            <div className="h-px flex-1 bg-zinc-800"></div>
+            <Wand2 className={cn("w-4 h-4", mutedTextClass)} />
+            <h2 className={cn("text-[9px] font-bold uppercase tracking-[0.2em]", isDayMode ? "text-slate-500" : "text-zinc-600")}>Sound Style</h2>
+            <span className={cn("text-[9px] uppercase tracking-widest", isDayMode ? "text-slate-400" : "text-zinc-700")}>Same loops, different tone</span>
+            <div className={cn("h-px flex-1", hairlineClass)}></div>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
             {AUDIO_STYLES.map((style) => {
@@ -1125,10 +1174,10 @@ export default function App() {
                   className={cn(
                     "h-9 shrink-0 rounded border px-3 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2",
                     selected
-                      ? "border-white/30 bg-white/15 text-white shadow-[0_0_18px_rgba(255,255,255,0.08)]"
-                      : "border-white/5 bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300"
+                      ? isDayMode ? "border-slate-900/20 bg-white text-slate-950 shadow-sm" : "border-white/30 bg-white/15 text-white shadow-[0_0_18px_rgba(255,255,255,0.08)]"
+                      : isDayMode ? "border-slate-900/10 bg-white/55 text-slate-500 hover:bg-white hover:text-slate-900" : "border-white/5 bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300"
                   )}
-                  title={`Switch ${activeTab.name} to ${style.name} without changing its rhythm`}
+                  title={`Switch ${activeTab.name} to the ${style.name} sound without changing its loops`}
                 >
                   <span className={cn("h-2 w-2 rounded-full", style.accent)}></span>
                   {style.name}
@@ -1140,7 +1189,7 @@ export default function App() {
         
         {/* TOP: Performance Modules (Drop Zones) */}
         <section
-          className="flex-1 rounded-2xl border p-8 flex flex-col overflow-hidden relative transition-colors duration-150"
+          className="min-h-[410px] flex-[1.25] rounded-2xl border px-8 pt-8 pb-6 flex flex-col overflow-hidden relative transition-colors duration-150"
           style={workbenchStyle}
         >
           <div className="pointer-events-none absolute inset-0 opacity-35">
@@ -1168,7 +1217,7 @@ export default function App() {
                 opacity: activeTab.isPlaying ? 0.16 + beatEnergy * 0.34 : 0,
               }}
             />
-            <div className="absolute bottom-5 left-8 right-8 flex items-end gap-1">
+            <div className="absolute bottom-4 left-10 right-10 flex items-end gap-1 opacity-70">
               {activeStyle.energy.map((energy, index) => {
                 const isCurrent = activeTab.isPlaying && index === activeTab.activeStep;
                 return (
@@ -1176,10 +1225,10 @@ export default function App() {
                     key={index}
                     className="relative flex-1 rounded-full transition-all duration-100"
                     style={{
-                      height: `${8 + energy * 36}px`,
+                      height: `${4 + energy * 14}px`,
                       background: activeStyle.accent,
-                      opacity: isCurrent ? 0.85 : 0.1 + energy * 0.2,
-                      transform: isCurrent ? `scaleY(${1.08 + beatEnergy * 0.38})` : undefined,
+                      opacity: isCurrent ? 0.58 : 0.08 + energy * 0.12,
+                      transform: isCurrent ? `scaleY(${1.04 + beatEnergy * 0.22})` : undefined,
                     }}
                   />
                 );
@@ -1188,7 +1237,7 @@ export default function App() {
           </div>
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <h2 className="text-sm font-bold uppercase tracking-widest text-zinc-400">Performance Matrix</h2>
+              <h2 className={cn("text-sm font-bold uppercase tracking-widest", isDayMode ? "text-slate-600" : "text-zinc-400")}>Performance Matrix</h2>
               <span
                 className="rounded px-2 py-1 text-[9px] font-bold uppercase tracking-widest border"
                 style={{ color: activeStyle.accent, borderColor: activeStyle.glow, background: activeStyle.panel }}
@@ -1197,7 +1246,7 @@ export default function App() {
               </span>
             </div>
             <div className="flex gap-4">
-              <span className="flex items-center gap-2 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+              <span className={cn("flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest", mutedTextClass)}>
                 Drag sounds into slots
               </span>
               <span className="flex items-center gap-2 text-[10px] text-emerald-400 font-bold uppercase tracking-widest">
@@ -1219,7 +1268,7 @@ export default function App() {
                   key={index}
                   className={cn(
                     "h-2 rounded-full transition-all duration-100",
-                    isBeat ? "bg-white/15" : "bg-white/8"
+                    isBeat ? isDayMode ? "bg-slate-900/15" : "bg-white/15" : isDayMode ? "bg-slate-900/8" : "bg-white/8"
                   )}
                   style={{
                     backgroundColor: isCurrent ? activeStyle.accent : undefined,
@@ -1231,7 +1280,7 @@ export default function App() {
             })}
           </div>
 
-          <div className="flex-1 flex items-center justify-center overflow-x-auto py-4">
+          <div className="relative z-10 flex-1 flex items-center justify-center overflow-x-auto pt-3 pb-10">
             <div className="flex gap-2 sm:gap-3 justify-center flex-nowrap min-w-max">
               {activeTab.slots.map((slot, index) => {
                 const isPlayingNow = activeTab.isPlaying && slot && slot.pattern[activeTab.activeStep] && (slot.pattern[activeTab.activeStep].note || slot.pattern[activeTab.activeStep].drum || slot.pattern[activeTab.activeStep].exp);
@@ -1247,7 +1296,11 @@ export default function App() {
                     onMouseLeave={handleModuleMouseLeave}
                     className={cn(
                       "relative w-14 h-32 sm:w-20 sm:h-44 lg:w-24 lg:h-56 rounded-xl border-2 flex flex-col items-center justify-end pb-2 transition-all overflow-hidden cursor-pointer",
-                      slot ? (isMuted ? 'border-white/5 bg-zinc-900' : 'border-white/20 bg-zinc-800 shadow-xl') : 'bg-white/5 border-white/10 border-dashed hover:bg-white/10'
+                      slot
+                        ? isMuted
+                          ? isDayMode ? 'border-slate-900/10 bg-slate-200/80' : 'border-white/5 bg-zinc-900'
+                          : isDayMode ? 'border-slate-900/15 bg-white shadow-lg' : 'border-white/20 bg-zinc-800 shadow-xl'
+                        : isDayMode ? 'bg-white/50 border-slate-900/15 border-dashed hover:bg-white' : 'bg-white/5 border-white/10 border-dashed hover:bg-white/10'
                     )}
                     style={{
                       borderColor: (!isMuted && isPlayingNow) ? activeStyle.accent : undefined,
@@ -1291,7 +1344,7 @@ export default function App() {
                             <UserCircle2 className="w-2/3 h-2/3 text-white/80" strokeWidth={1.5} />
                           </div>
                           
-                          <div className="text-[8px] sm:text-[10px] font-bold opacity-80 uppercase tracking-widest text-zinc-300 truncate w-full text-center px-1">{slot.name}</div>
+                          <div className={cn("text-[8px] sm:text-[10px] font-bold opacity-80 uppercase tracking-widest truncate w-full text-center px-1", isDayMode ? "text-slate-700" : "text-zinc-300")}>{slot.name}</div>
                           
                           <button 
                             onClick={(e) => { e.stopPropagation(); handleClearSlot(index); }}
@@ -1314,8 +1367,8 @@ export default function App() {
                     
                     {!slot && (
                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
-                          <span className="text-white/10 text-xl font-light">+</span>
-                          <span className="text-[8px] font-bold uppercase tracking-widest text-white/15">Drop</span>
+                          <span className={cn("text-xl font-light", isDayMode ? "text-slate-900/20" : "text-white/10")}>+</span>
+                          <span className={cn("text-[8px] font-bold uppercase tracking-widest", isDayMode ? "text-slate-900/25" : "text-white/15")}>Drop</span>
                        </div>
                     )}
                   </div>
@@ -1428,10 +1481,13 @@ export default function App() {
         </AnimatePresence>
 
         {/* BOTTOM: Music Modules (Draggable Sounds) */}
-        <section className="h-56 flex flex-col gap-2 shrink-0">
+        <section className={cn(
+          "relative z-20 h-52 flex flex-col gap-2 shrink-0 rounded-2xl border p-3",
+          isDayMode ? "border-slate-900/10 bg-white/85 shadow-[0_-18px_40px_rgba(148,163,184,0.25)]" : "border-white/5 bg-[#0d0d10] shadow-[0_-18px_40px_rgba(0,0,0,0.35)]"
+        )}>
           <div className="flex items-center gap-2">
-            <h2 className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">Sample Library</h2>
-            <div className="flex-1 h-px bg-zinc-800"></div>
+            <h2 className={cn("text-[9px] font-bold uppercase tracking-[0.2em]", isDayMode ? "text-slate-500" : "text-zinc-600")}>Sample Library</h2>
+            <div className={cn("flex-1 h-px", hairlineClass)}></div>
             
             {/* Record Controls */}
             <div className="flex items-center gap-2">
@@ -1444,7 +1500,7 @@ export default function App() {
               />
               <button 
                 onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1 rounded text-[9px] font-bold uppercase tracking-widest transition-all bg-white/5 text-zinc-400 hover:bg-white/10"
+                className={cn("flex items-center gap-1.5 px-3 py-1 rounded text-[9px] font-bold uppercase tracking-widest transition-all", isDayMode ? "bg-slate-900/5 text-slate-500 hover:bg-slate-900/10" : "bg-white/5 text-zinc-400 hover:bg-white/10")}
               >
                 <Upload size={10} />
                 Upload
@@ -1453,7 +1509,7 @@ export default function App() {
                 onClick={isRecording ? stopRecording : startRecording}
                 className={cn(
                   "flex items-center gap-1.5 px-3 py-1 rounded text-[9px] font-bold uppercase tracking-widest transition-all",
-                  isRecording ? "bg-red-500 text-white animate-pulse" : "bg-white/5 text-zinc-400 hover:bg-white/10"
+                  isRecording ? "bg-red-500 text-white animate-pulse" : isDayMode ? "bg-slate-900/5 text-slate-500 hover:bg-slate-900/10" : "bg-white/5 text-zinc-400 hover:bg-white/10"
                 )}
               >
                 {isRecording ? <MicOff size={10} /> : <Mic size={10} />}
@@ -1472,17 +1528,20 @@ export default function App() {
               
               return (
                 <div key={cat.id} className="flex flex-col gap-1.5">
-                  <h3 className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest pl-1">{cat.name}</h3>
+                  <h3 className={cn("text-[9px] font-bold uppercase tracking-widest pl-1", mutedTextClass)}>{cat.name}</h3>
                   <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
                     {items.length === 0 && cat.id === 'custom' && (
-                       <div className="text-[9px] text-zinc-700 italic pl-1 py-2">No recordings yet. Hit 'Rec New' upward!</div>
+                       <div className={cn("text-[9px] italic pl-1 py-2", isDayMode ? "text-slate-400" : "text-zinc-700")}>No recordings yet. Hit 'Rec New' upward!</div>
                     )}
                     {items.map((item) => (
                       <div
                         key={item.id}
                         draggable
                         onDragStart={(e) => handleDragStart(e, item)}
-                        className="flex-none w-32 bg-zinc-800/80 rounded-lg border border-white/5 p-3 flex flex-col justify-between hover:bg-zinc-700 cursor-grab active:cursor-grabbing group transition-colors relative origin-center"
+                        className={cn(
+                          "flex-none w-32 rounded-lg border p-3 flex flex-col justify-between cursor-grab active:cursor-grabbing group transition-colors relative origin-center",
+                          isDayMode ? "bg-white border-slate-900/10 hover:bg-slate-50 shadow-sm" : "bg-zinc-800/80 border-white/5 hover:bg-zinc-700"
+                        )}
                         title={item.name}
                       >
                          {cat.id === 'custom' && (
@@ -1494,7 +1553,7 @@ export default function App() {
                            </button>
                          )}
                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[9px] font-bold text-white uppercase truncate">{item.name}</span>
+                            <span className={cn("text-[9px] font-bold uppercase truncate", isDayMode ? "text-slate-800" : "text-white")}>{item.name}</span>
                             <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", item.color)}></div>
                          </div>
                          <div className="space-y-1.5 mt-auto">
@@ -1503,7 +1562,7 @@ export default function App() {
                                 <div key={i} className={cn("w-1 flex-1 rounded-t-sm opacity-40 group-hover:opacity-60", item.color)} style={{ height: `${h * 15}%`}}></div>
                               ))}
                            </div>
-                           <div className="text-[8px] text-zinc-600 uppercase tracking-tighter truncate">{cat.id === 'custom' ? 'RECORDED' : cat.id === 'beat' ? 'LOOP / 120' : 'SYNTH'}</div>
+                           <div className={cn("text-[8px] uppercase tracking-tighter truncate", isDayMode ? "text-slate-400" : "text-zinc-600")}>{cat.id === 'custom' ? 'RECORDED' : cat.id === 'beat' ? 'LOOP / 120' : 'SYNTH'}</div>
                          </div>
                       </div>
                     ))}
