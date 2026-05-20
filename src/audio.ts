@@ -324,6 +324,14 @@ export class SlotChannel {
     this.outGain.connect(masterOut);
   }
 
+  connectOutput(node: AudioNode) {
+    this.outGain.connect(node);
+  }
+
+  disconnectOutput(node: AudioNode) {
+    this.outGain.disconnect(node);
+  }
+
   applyParams(p: FxParams) {
     const time = this.outGain.context.currentTime;
     this.outGain.gain.setTargetAtTime(p.volume / 100, time, 0.05);
@@ -366,6 +374,14 @@ export class ProjectEngine {
     for (let i = 0; i < 7; i++) {
       this.channels.push(new SlotChannel(this.ctx, this.masterChannel.input));
     }
+  }
+
+  connectOutput(node: AudioNode) {
+    this.masterChannel.connectOutput(node);
+  }
+
+  disconnectOutput(node: AudioNode) {
+    this.masterChannel.disconnectOutput(node);
   }
 
   setFxParams(index: number, params: FxParams) {
@@ -1162,6 +1178,7 @@ export class ProjectEngine {
 export class GlobalEngineManager {
   ctx: AudioContext | null = null;
   projects: Map<string, ProjectEngine> = new Map();
+  captureDestination: MediaStreamAudioDestinationNode | null = null;
   bpm = 120;
   step = 0;
   nextNoteTime = 0;
@@ -1184,9 +1201,30 @@ export class GlobalEngineManager {
     this.init();
     if (!this.projects.has(id)) {
       const p = new ProjectEngine(id, this.ctx!, this.ctx!.destination);
+      if (this.captureDestination) p.connectOutput(this.captureDestination);
       this.projects.set(id, p);
     }
     return this.projects.get(id)!;
+  }
+
+  startCaptureStream(): MediaStream {
+    this.init();
+    this.captureDestination = this.ctx!.createMediaStreamDestination();
+    this.projects.forEach(project => project.connectOutput(this.captureDestination!));
+    return this.captureDestination.stream;
+  }
+
+  stopCaptureStream() {
+    if (!this.captureDestination) return;
+    const destination = this.captureDestination;
+    this.projects.forEach(project => {
+      try {
+        project.disconnectOutput(destination);
+      } catch {
+        // The project may have been created after capture stopped.
+      }
+    });
+    this.captureDestination = null;
   }
 
   get isClockRunning() {

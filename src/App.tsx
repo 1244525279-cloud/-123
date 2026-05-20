@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, RotateCcw, Shuffle, Keyboard, Circle, Wand2, Sun, Moon, Trash2, Radio } from 'lucide-react';
+import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, RotateCcw, Shuffle, Keyboard, Circle, Wand2, Sun, Moon, Trash2, Radio, ListMusic, Scissors, Copy, MoveHorizontal, SkipBack, SkipForward, Pause } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AUDIO_STYLES, AVAILABLE_SOUNDS, AudioStyleId, SoundDef, engineManager, FxParams, defaultFx, KEYBOARD_NOTES } from './audio';
 import { cn } from './lib/utils';
@@ -54,6 +54,46 @@ interface TabData {
   styleId: AudioStyleId;
   isPlaying: boolean;
   activeStep: number;
+}
+
+type ViewMode = 'matrix' | 'timeline';
+
+interface ArrangementEvent {
+  id: string;
+  tabId: string;
+  tabName: string;
+  startMs: number;
+  durationMs?: number;
+  tab: TabData;
+}
+
+interface TimelineClip {
+  id: string;
+  soundId: string;
+  track: number;
+  start: number;
+  duration: number;
+  trimStart: number;
+}
+
+interface TimelinePointerEdit {
+  clipId: string;
+  mode: 'move' | 'trim-start' | 'trim-end';
+  pointerStartX: number;
+  pointerStartY: number;
+  clipStart: number;
+  clipDuration: number;
+  clipTrimStart: number;
+  clipTrack: number;
+}
+
+interface TimelineTransportEdit {
+  mode: 'playhead' | 'range-start' | 'range-end' | 'range-move';
+  pointerStartX: number;
+  rangeStart: number;
+  rangeEnd: number;
+  playhead: number;
+  wasPlaying: boolean;
 }
 
 interface StylePreset {
@@ -376,6 +416,133 @@ const createStyleTab = (preset: StylePreset, id = 'tab-1', styleId: AudioStyleId
 
 const createCodexSongTab = (): TabData => createStyleTab(STYLE_PRESETS[0]);
 
+const CLIP_COLOR_CLASSES = ['bg-emerald-500', 'bg-sky-500', 'bg-amber-500', 'bg-fuchsia-500', 'bg-rose-500', 'bg-lime-500'];
+const TIMELINE_TRACKS = 5;
+const DEFAULT_TIMELINE_SECONDS = 32;
+const PIXELS_PER_SECOND = 84;
+const TIMELINE_SNAP = 0.25;
+const TRACK_ROW_HEIGHT = 104;
+
+const getInternalRecordingMimeType = () => {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+  ];
+  return candidates.find(type => MediaRecorder.isTypeSupported(type)) ?? '';
+};
+
+const cloneTabForRecording = (tab: TabData): TabData => ({
+  ...tab,
+  slots: [...tab.slots],
+  mutedSlots: [...tab.mutedSlots],
+  fxSlots: tab.fxSlots.map(fx => ({ ...fx })),
+  masterFx: { ...tab.masterFx },
+  isPlaying: false,
+  activeStep: 0,
+});
+
+const triggerOfflineDrum = (ctx: OfflineAudioContext, destination: AudioNode, type: string, time: number, gainValue = 0.55) => {
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(gainValue, time);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + (type === 'kick' ? 0.38 : 0.14));
+  gain.connect(destination);
+
+  if (type === 'kick') {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(120, time);
+    osc.frequency.exponentialRampToValueAtTime(44, time + 0.34);
+    osc.connect(gain);
+    osc.start(time);
+    osc.stop(time + 0.38);
+    return;
+  }
+
+  const buffer = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * 0.18)), ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.055));
+  }
+  const source = ctx.createBufferSource();
+  const filter = ctx.createBiquadFilter();
+  filter.type = type === 'hihat' ? 'highpass' : 'bandpass';
+  filter.frequency.value = type === 'hihat' ? 5200 : 1600;
+  source.buffer = buffer;
+  source.connect(filter);
+  filter.connect(gain);
+  source.start(time);
+};
+
+const triggerOfflineSynth = (ctx: OfflineAudioContext, destination: AudioNode, midiNote: number, category: string, time: number, gainValue = 0.18) => {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const filter = ctx.createBiquadFilter();
+  const isBass = category === 'bass';
+  const frequency = 440 * Math.pow(2, (midiNote - 69) / 12) * (isBass ? 0.5 : 1);
+  osc.type = isBass ? 'square' : category === 'theme' ? 'triangle' : 'sawtooth';
+  osc.frequency.value = frequency;
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(isBass ? 700 : 1800, time);
+  gain.gain.setValueAtTime(gainValue, time);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + (isBass ? 0.42 : 0.3));
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(destination);
+  osc.start(time);
+  osc.stop(time + (isBass ? 0.46 : 0.34));
+};
+
+const renderArrangementBuffer = async (events: ArrangementEvent[]): Promise<AudioBuffer | null> => {
+  const usableEvents = events.filter(event => (event.durationMs ?? 0) > 120);
+  if (!usableEvents.length) return null;
+
+  const sampleRate = 44100;
+  const totalSeconds = Math.min(48, Math.max(...usableEvents.map(event => (event.startMs + (event.durationMs ?? 0)) / 1000)) + 0.5);
+  const ctx = new OfflineAudioContext(2, Math.ceil(totalSeconds * sampleRate), sampleRate);
+  const stepDuration = 60 / 120 / 4;
+
+  usableEvents.forEach((event) => {
+    const eventStart = event.startMs / 1000;
+    const eventDuration = Math.max(0.5, (event.durationMs ?? 2000) / 1000);
+
+    event.tab.slots.forEach((slot, slotIndex) => {
+      if (!slot || event.tab.mutedSlots[slotIndex]) return;
+      const channelGain = ctx.createGain();
+      channelGain.gain.value = Math.max(0.05, Math.min(1, event.tab.fxSlots[slotIndex]?.volume ?? 100) / 100) * 0.7;
+      channelGain.connect(ctx.destination);
+
+      if (slot.buffer) {
+        let cursor = eventStart;
+        const loopLength = slot.playMode === 'buffer' || slot.loopMode === 'full' ? Math.min(slot.buffer.duration, eventDuration) : stepDuration;
+        while (cursor < eventStart + eventDuration) {
+          const source = ctx.createBufferSource();
+          source.buffer = slot.buffer;
+          source.connect(channelGain);
+          source.start(cursor, 0, Math.min(loopLength, eventStart + eventDuration - cursor));
+          cursor += Math.max(stepDuration, loopLength);
+        }
+        return;
+      }
+
+      for (let t = 0; t < eventDuration; t += stepDuration * 16) {
+        slot.pattern.forEach((step, stepIndex) => {
+          const when = eventStart + t + stepIndex * stepDuration;
+          if (when > eventStart + eventDuration) return;
+          if (step.drum) triggerOfflineDrum(ctx, channelGain, step.drum, when);
+          if (step.note) {
+            const notes = Array.isArray(step.note) ? step.note : [step.note];
+            notes.forEach(note => triggerOfflineSynth(ctx, channelGain, note, slot.category, when));
+          }
+          if (step.exp) triggerOfflineDrum(ctx, channelGain, step.exp === 'laser' ? 'clap' : 'hihat', when, 0.22);
+        });
+      }
+    });
+  });
+
+  return ctx.startRendering();
+};
+
 const hydrateColorMode = (): ColorMode => {
   if (typeof window === 'undefined') return 'night';
   return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'day' ? 'day' : 'night';
@@ -413,6 +580,15 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'loaded'>('idle');
   const [colorMode, setColorMode] = useState<ColorMode>(hydrateColorMode);
   const [pendingPlayIds, setPendingPlayIds] = useState<Set<string>>(() => new Set());
+  const [viewMode, setViewMode] = useState<ViewMode>('matrix');
+  const [isGlobalRecording, setIsGlobalRecording] = useState(false);
+  const [arrangementEvents, setArrangementEvents] = useState<ArrangementEvent[]>([]);
+  const [timelineClips, setTimelineClips] = useState<TimelineClip[]>([]);
+  const [selectedTimelineClipId, setSelectedTimelineClipId] = useState<string | null>(null);
+  const [timelinePlayhead, setTimelinePlayhead] = useState(0);
+  const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
+  const [timelineDuration, setTimelineDuration] = useState(DEFAULT_TIMELINE_SECONDS);
+  const [timelineLoopRange, setTimelineLoopRange] = useState({ start: 0, end: 8 });
   
   const [activeTabId, setActiveTabId] = useState('tab-1');
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
@@ -440,6 +616,18 @@ export default function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
+  const globalRecordStartedAtRef = useRef<number>(0);
+  const globalRecorderRef = useRef<MediaRecorder | null>(null);
+  const globalRecordChunksRef = useRef<Blob[]>([]);
+  const timelineGridRef = useRef<HTMLDivElement>(null);
+  const timelineEditRef = useRef<TimelinePointerEdit | null>(null);
+  const timelineTransportEditRef = useRef<TimelineTransportEdit | null>(null);
+  const timelineSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const timelineAnimationRef = useRef<number | null>(null);
+  const timelineStartedAtRef = useRef(0);
+  const timelineOffsetRef = useRef(0);
+  const timelineLoopRangeRef = useRef(timelineLoopRange);
+  const timelinePlayheadRef = useRef(timelinePlayhead);
 
   // Keyboard states
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -716,12 +904,14 @@ export default function App() {
     
     if (!tab.isPlaying && !isPending) {
       const startMode = engineManager.startProject(id);
+      recordArrangementStart(tab);
       if (startMode === 'started') {
         setTabs(prev => prev.map(t => t.id === id ? { ...t, isPlaying: true, activeStep: 0 } : t));
       } else {
         setPendingPlayIds(prev => new Set(prev).add(id));
       }
     } else {
+      recordArrangementStop(id);
       engineManager.stopProject(id);
       setPendingPlayIds(prev => {
         const next = new Set(prev);
@@ -805,6 +995,121 @@ export default function App() {
   const handleStyleChange = (styleId: AudioStyleId) => {
     setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, styleId } : t));
     engineManager.getProject(activeTab.id).setStyle(styleId);
+  };
+
+  const recordArrangementStart = (tab: TabData) => {
+    if (!isGlobalRecording || !globalRecordStartedAtRef.current) return;
+    const now = Date.now();
+    const startMs = now - globalRecordStartedAtRef.current;
+    setArrangementEvents(prev => [
+      ...prev,
+      {
+        id: `evt-${now}-${tab.id}`,
+        tabId: tab.id,
+        tabName: tab.name,
+        startMs,
+        tab: cloneTabForRecording(tab),
+      },
+    ]);
+  };
+
+  const recordArrangementStop = (tabId: string) => {
+    if (!isGlobalRecording || !globalRecordStartedAtRef.current) return;
+    const nowMs = Date.now() - globalRecordStartedAtRef.current;
+    setArrangementEvents(prev => prev.map(event => (
+      event.tabId === tabId && event.durationMs === undefined
+        ? { ...event, durationMs: Math.max(350, nowMs - event.startMs) }
+        : event
+    )));
+  };
+
+  const startGlobalRecording = () => {
+    try {
+      engineManager.init();
+      const stream = engineManager.startCaptureStream();
+      const mimeType = getInternalRecordingMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      globalRecordChunksRef.current = [];
+      globalRecordStartedAtRef.current = Date.now();
+      setArrangementEvents([]);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) globalRecordChunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = async () => {
+        engineManager.stopCaptureStream();
+        stream.getTracks().forEach(track => track.stop());
+        globalRecorderRef.current = null;
+        const blob = new Blob(globalRecordChunksRef.current, { type: mimeType || 'audio/webm' });
+        globalRecordChunksRef.current = [];
+        globalRecordStartedAtRef.current = 0;
+        if (!blob.size) return;
+
+        try {
+          engineManager.init();
+          if (!engineManager.ctx) return;
+          const arrayBuffer = await blob.arrayBuffer();
+          const capturedBuffer = await engineManager.ctx.decodeAudioData(arrayBuffer);
+          const soundIndex = recordedSounds.filter(sound => sound.id.startsWith('arr-')).length + 1;
+          const newSound: SoundDef = {
+            id: `arr-${Date.now()}`,
+            name: `内录原声 ${soundIndex}`,
+            category: 'custom',
+            color: CLIP_COLOR_CLASSES[recordedSounds.length % CLIP_COLOR_CLASSES.length],
+            pattern: [{ note: 1 }, ...new Array(15).fill({})],
+            buffer: capturedBuffer,
+            loopMode: 'full',
+            playMode: 'buffer',
+          };
+
+          setRecordedSounds(prev => [...prev, newSound]);
+          setTimelineClips(prev => [
+            ...prev,
+            {
+              id: `clip-${Date.now()}`,
+              soundId: newSound.id,
+              track: Math.min(prev.length % TIMELINE_TRACKS, TIMELINE_TRACKS - 1),
+              start: Math.min(2 + prev.length * 1.25, Math.max(0, timelineDuration - Math.min(8, capturedBuffer.duration))),
+              duration: Math.min(timelineDuration, Math.max(0.5, capturedBuffer.duration)),
+              trimStart: 0,
+            },
+          ]);
+          setViewMode('timeline');
+        } catch (err) {
+          console.error('Global recording decode failed', err);
+          alert('录制完成，但音频生成失败，请再试一次。');
+        }
+      };
+
+      recorder.start();
+      globalRecorderRef.current = recorder;
+      setIsGlobalRecording(true);
+    } catch (err) {
+      engineManager.stopCaptureStream();
+      globalRecorderRef.current = null;
+      console.error('Global recording failed', err);
+      alert('无法开始全局录制，请先点击播放一个标签后再试。');
+    }
+  };
+
+  const stopGlobalRecording = () => {
+    setIsGlobalRecording(false);
+    if (globalRecorderRef.current?.state === 'recording') {
+      globalRecorderRef.current.requestData();
+      globalRecorderRef.current.stop();
+    } else {
+      engineManager.stopCaptureStream();
+      globalRecorderRef.current = null;
+    }
+  };
+
+  const toggleGlobalRecording = () => {
+    if (isGlobalRecording) {
+      stopGlobalRecording();
+    } else {
+      startGlobalRecording();
+    }
   };
 
   interface SerializableSoundDef extends Omit<SoundDef, 'buffer'> {
@@ -1086,6 +1391,636 @@ export default function App() {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   };
+
+  const getSoundById = (id: string) => recordedSounds.find(sound => sound.id === id) || AVAILABLE_SOUNDS.find(sound => sound.id === id);
+
+  useEffect(() => {
+    timelineLoopRangeRef.current = timelineLoopRange;
+  }, [timelineLoopRange]);
+
+  useEffect(() => {
+    timelinePlayheadRef.current = timelinePlayhead;
+  }, [timelinePlayhead]);
+
+  useEffect(() => {
+    const minRange = 0.25;
+    setTimelineLoopRange(prev => {
+      const end = Math.max(minRange, Math.min(prev.end, timelineDuration));
+      const start = Math.max(0, Math.min(prev.start, end - minRange));
+      if (start === prev.start && end === prev.end) return prev;
+      return { start, end };
+    });
+    setTimelinePlayhead(prev => Math.max(0, Math.min(prev, timelineDuration)));
+    setTimelineClips(prev => prev.map(clip => {
+      const duration = Math.max(0.5, Math.min(clip.duration, timelineDuration));
+      const start = Math.max(0, Math.min(clip.start, Math.max(0, timelineDuration - duration)));
+      if (start === clip.start && duration === clip.duration) return clip;
+      return { ...clip, start, duration };
+    }));
+  }, [timelineDuration]);
+
+  const snapTime = (value: number, candidates: number[] = []) => {
+    const clamped = Math.max(0, Math.min(timelineDuration, value));
+    const grid = Math.round(clamped / TIMELINE_SNAP) * TIMELINE_SNAP;
+    const closeCandidate = candidates.find(candidate => Math.abs(candidate - clamped) <= 0.12);
+    return Math.max(0, Math.min(timelineDuration, closeCandidate ?? grid));
+  };
+
+  const timelineSnapCandidates = (excludeClipId?: string) => timelineClips
+    .filter(clip => clip.id !== excludeClipId)
+    .flatMap(clip => [clip.start, clip.start + clip.duration]);
+
+  const seekTimelinePlayhead = (value: number) => {
+    const next = snapTime(value, [
+      timelineLoopRangeRef.current.start,
+      timelineLoopRangeRef.current.end,
+      ...timelineSnapCandidates(),
+    ]);
+    timelineOffsetRef.current = next;
+    timelinePlayheadRef.current = next;
+    setTimelinePlayhead(next);
+  };
+
+  const timeFromTimelinePointer = (clientX: number) => {
+    const rect = timelineGridRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    return (clientX - rect.left - 80) / PIXELS_PER_SECOND;
+  };
+
+  const handleTimelineDrop = (e: React.DragEvent, track: number) => {
+    e.preventDefault();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const start = snapTime((e.clientX - rect.left) / PIXELS_PER_SECOND, timelineSnapCandidates());
+
+    try {
+      const data = e.dataTransfer.getData('application/json');
+      const itemData = JSON.parse(data) as SoundDef;
+      const item = getSoundById(itemData.id);
+      if (!item) return;
+      const duration = Math.min(timelineDuration, 8, Math.max(1.5, item.buffer?.duration ?? 4));
+      setTimelineClips(prev => [
+        ...prev,
+        {
+          id: `clip-${Date.now()}`,
+          soundId: item.id,
+          track,
+          start: Math.max(0, Math.min(timelineDuration - duration, start)),
+          duration,
+          trimStart: 0,
+        },
+      ]);
+    } catch (err) {
+      console.error('Timeline drop error', err);
+    }
+  };
+
+  const handleTimelineClipDragStart = (e: React.DragEvent, clipId: string) => {
+    e.preventDefault();
+    e.dataTransfer.setData('application/x-timeline-clip', clipId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const duplicateTimelineClip = (clipId: string) => {
+    const clip = timelineClips.find(item => item.id === clipId);
+    if (!clip) return;
+    setTimelineClips(prev => [
+      ...prev,
+      {
+        ...clip,
+        id: `clip-${Date.now()}`,
+        start: Math.max(0, Math.min(timelineDuration - clip.duration, clip.start + 0.75)),
+        track: Math.min(TIMELINE_TRACKS - 1, clip.track + 1),
+      },
+    ]);
+  };
+
+  const cropTimelineClip = (clipId: string, edge: 'left' | 'right', amount: number) => {
+    setTimelineClips(prev => prev.map(clip => {
+      if (clip.id !== clipId) return clip;
+      if (edge === 'left') {
+        const nextDuration = Math.max(0.5, clip.duration - amount);
+        return {
+          ...clip,
+          start: Math.min(clip.start + amount, clip.start + clip.duration - 0.5),
+          duration: nextDuration,
+          trimStart: Math.max(0, clip.trimStart + amount),
+        };
+      }
+      return { ...clip, duration: Math.max(0.5, clip.duration + amount) };
+    }));
+  };
+
+  const beginTimelineEdit = (event: React.PointerEvent, clip: TimelineClip, mode: TimelinePointerEdit['mode']) => {
+    event.stopPropagation();
+    event.preventDefault();
+    setSelectedTimelineClipId(clip.id);
+    timelineEditRef.current = {
+      clipId: clip.id,
+      mode,
+      pointerStartX: event.clientX,
+      pointerStartY: event.clientY,
+      clipStart: clip.start,
+      clipDuration: clip.duration,
+      clipTrimStart: clip.trimStart,
+      clipTrack: clip.track,
+    };
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  };
+
+  const beginTimelineTransportEdit = (event: React.PointerEvent, mode: TimelineTransportEdit['mode']) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (mode === 'playhead' && isTimelinePlaying) {
+      stopTimelinePlayback(false);
+    }
+    timelineTransportEditRef.current = {
+      mode,
+      pointerStartX: event.clientX,
+      rangeStart: timelineLoopRangeRef.current.start,
+      rangeEnd: timelineLoopRangeRef.current.end,
+      playhead: timelinePlayheadRef.current,
+      wasPlaying: isTimelinePlaying,
+    };
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  };
+
+  const handleTimelineSurfacePointerDown = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    const wasPlaying = isTimelinePlaying;
+    if (wasPlaying) stopTimelinePlayback(false);
+    seekTimelinePlayhead(timeFromTimelinePointer(event.clientX));
+    if (wasPlaying) requestAnimationFrame(playTimeline);
+  };
+
+  const clearTimelinePlayback = () => {
+    timelineSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch {
+        // Already stopped.
+      }
+    });
+    timelineSourcesRef.current = [];
+    if (timelineAnimationRef.current !== null) {
+      cancelAnimationFrame(timelineAnimationRef.current);
+      timelineAnimationRef.current = null;
+    }
+  };
+
+  const stopTimelinePlayback = (resetHead = false) => {
+    clearTimelinePlayback();
+    setIsTimelinePlaying(false);
+    if (resetHead) {
+      const start = timelineLoopRangeRef.current.start;
+      timelineOffsetRef.current = start;
+      timelinePlayheadRef.current = start;
+      setTimelinePlayhead(start);
+    }
+  };
+
+  const playTimeline = () => {
+    clearTimelinePlayback();
+    engineManager.init();
+    const ctx = engineManager.ctx;
+    if (!ctx) return;
+    const range = timelineLoopRangeRef.current;
+    const loopStart = Math.min(range.start, range.end - 0.25);
+    const loopEnd = Math.max(loopStart + 0.25, range.end);
+    const currentHead = timelinePlayheadRef.current;
+    const offset = currentHead >= loopStart && currentHead < loopEnd ? currentHead : loopStart;
+    timelineStartedAtRef.current = ctx.currentTime + 0.08 - offset;
+    timelineOffsetRef.current = offset;
+    timelinePlayheadRef.current = offset;
+    setTimelinePlayhead(offset);
+    setIsTimelinePlaying(true);
+
+    const scheduleSegment = (segmentOffset: number) => {
+      clearTimelinePlayback();
+      timelineStartedAtRef.current = ctx.currentTime + 0.04 - segmentOffset;
+      timelineClips.forEach(clip => {
+        const sound = getSoundById(clip.soundId);
+        if (!sound?.buffer) return;
+        const clipEnd = clip.start + clip.duration;
+        const audibleStart = Math.max(clip.start, segmentOffset);
+        const audibleEnd = Math.min(clipEnd, loopEnd);
+        if (audibleEnd <= audibleStart) return;
+        const source = ctx.createBufferSource();
+        const gain = ctx.createGain();
+        const sourceOffset = clip.trimStart + audibleStart - clip.start;
+        const duration = Math.min(audibleEnd - audibleStart, sound.buffer.duration - sourceOffset);
+        if (duration <= 0) return;
+        source.buffer = sound.buffer;
+        gain.gain.value = 0.82;
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        source.start(ctx.currentTime + 0.04 + audibleStart - segmentOffset, sourceOffset, duration);
+        timelineSourcesRef.current.push(source);
+      });
+    };
+
+    const animate = () => {
+      if (!engineManager.ctx) return;
+      const next = engineManager.ctx.currentTime - timelineStartedAtRef.current;
+      if (next >= loopEnd) {
+        timelineOffsetRef.current = loopStart;
+        timelinePlayheadRef.current = loopStart;
+        setTimelinePlayhead(loopStart);
+        scheduleSegment(loopStart);
+        timelineAnimationRef.current = requestAnimationFrame(animate);
+        return;
+      }
+      timelinePlayheadRef.current = next;
+      setTimelinePlayhead(next);
+      timelineAnimationRef.current = requestAnimationFrame(animate);
+    };
+
+    scheduleSegment(offset);
+    timelineAnimationRef.current = requestAnimationFrame(animate);
+  };
+
+  const pauseTimeline = () => {
+    timelineOffsetRef.current = timelinePlayheadRef.current;
+    stopTimelinePlayback(false);
+  };
+
+  const rewindTimeline = () => {
+    stopTimelinePlayback(true);
+  };
+
+  const jumpTimelineToEnd = () => {
+    stopTimelinePlayback(false);
+    timelineOffsetRef.current = timelineDuration;
+    timelinePlayheadRef.current = timelineDuration;
+    setTimelinePlayhead(timelineDuration);
+  };
+
+  const handleTimelineDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = Number(event.target.value);
+    if (!Number.isFinite(next)) return;
+    if (isTimelinePlaying) stopTimelinePlayback(false);
+    setTimelineDuration(Math.max(1, Math.min(600, next)));
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const transportEdit = timelineTransportEditRef.current;
+      if (transportEdit) {
+        const dx = (event.clientX - transportEdit.pointerStartX) / PIXELS_PER_SECOND;
+
+        if (transportEdit.mode === 'playhead') {
+          seekTimelinePlayhead(transportEdit.playhead + dx);
+          return;
+        }
+
+        if (transportEdit.mode === 'range-start') {
+          const nextStart = Math.min(
+            transportEdit.rangeEnd - 0.25,
+            snapTime(transportEdit.rangeStart + dx, timelineSnapCandidates()),
+          );
+          setTimelineLoopRange(prev => ({
+            ...prev,
+            start: Math.max(0, nextStart),
+          }));
+          return;
+        }
+
+        if (transportEdit.mode === 'range-end') {
+          const nextEnd = Math.max(
+            transportEdit.rangeStart + 0.25,
+            snapTime(transportEdit.rangeEnd + dx, timelineSnapCandidates()),
+          );
+          setTimelineLoopRange(prev => ({
+            ...prev,
+            end: Math.min(timelineDuration, nextEnd),
+          }));
+          return;
+        }
+
+        const duration = transportEdit.rangeEnd - transportEdit.rangeStart;
+        const nextStart = Math.max(0, Math.min(timelineDuration - duration, snapTime(transportEdit.rangeStart + dx, timelineSnapCandidates())));
+        setTimelineLoopRange({
+          start: nextStart,
+          end: nextStart + duration,
+        });
+        return;
+      }
+
+      const edit = timelineEditRef.current;
+      if (!edit) return;
+      const dx = (event.clientX - edit.pointerStartX) / PIXELS_PER_SECOND;
+      const candidates = timelineSnapCandidates(edit.clipId);
+
+      setTimelineClips(prev => prev.map(clip => {
+        if (clip.id !== edit.clipId) return clip;
+
+        if (edit.mode === 'move') {
+          const rect = timelineGridRef.current?.getBoundingClientRect();
+          const track = rect
+            ? Math.max(0, Math.min(TIMELINE_TRACKS - 1, Math.floor((event.clientY - rect.top) / TRACK_ROW_HEIGHT)))
+            : edit.clipTrack;
+          const snappedStart = snapTime(edit.clipStart + dx, candidates);
+          return {
+            ...clip,
+            start: Math.max(0, Math.min(timelineDuration - clip.duration, snappedStart)),
+            track,
+          };
+        }
+
+        if (edit.mode === 'trim-start') {
+          const rawStart = edit.clipStart + dx;
+          const maxStart = edit.clipStart + edit.clipDuration - 0.5;
+          const snappedStart = Math.max(0, Math.min(maxStart, snapTime(rawStart, candidates)));
+          const consumed = snappedStart - edit.clipStart;
+          return {
+            ...clip,
+            start: snappedStart,
+            duration: Math.max(0.5, edit.clipDuration - consumed),
+            trimStart: Math.max(0, edit.clipTrimStart + consumed),
+          };
+        }
+
+        const rawEnd = edit.clipStart + edit.clipDuration + dx;
+        const maxEnd = Math.min(timelineDuration, edit.clipStart + (getSoundById(clip.soundId)?.buffer?.duration ?? timelineDuration) - edit.clipTrimStart);
+        const snappedEnd = Math.max(edit.clipStart + 0.5, Math.min(maxEnd, snapTime(rawEnd, candidates)));
+        return {
+          ...clip,
+          duration: Math.max(0.5, snappedEnd - edit.clipStart),
+        };
+      }));
+    };
+
+    const handlePointerUp = () => {
+      const transportEdit = timelineTransportEditRef.current;
+      timelineEditRef.current = null;
+      timelineTransportEditRef.current = null;
+      if (transportEdit?.mode === 'playhead' && transportEdit.wasPlaying) {
+        requestAnimationFrame(playTimeline);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [timelineClips, recordedSounds]);
+
+  const renderTimelinePage = () => (
+    <main className="min-h-0 flex-1 grid grid-cols-[260px_minmax(0,1fr)] gap-0 overflow-hidden">
+      <aside className={cn("border-r p-4 flex flex-col gap-4 overflow-hidden", isDayMode ? "border-slate-900/10 bg-white/75" : "border-white/5 bg-black/35")}>
+        <div className="flex items-center justify-between">
+          <h2 className={cn("text-[10px] font-bold uppercase tracking-[0.22em]", mutedTextClass)}>素材库</h2>
+          <span className={cn("rounded px-2 py-1 text-[9px] font-bold", isDayMode ? "bg-slate-900/5 text-slate-500" : "bg-white/5 text-zinc-500")}>{recordedSounds.length}</span>
+        </div>
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 scrollbar-none">
+          {recordedSounds.length === 0 && (
+            <div className={cn("rounded-xl border border-dashed p-4 text-[11px] leading-relaxed", isDayMode ? "border-slate-900/15 text-slate-400" : "border-white/10 text-zinc-600")}>
+              点击顶部录制按钮，播放几个标签片段，再停止录制。生成的音乐片段会自动出现在这里。
+            </div>
+          )}
+          {recordedSounds.map((sound, index) => (
+            <div
+              key={sound.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e, sound)}
+              className={cn("rounded-lg border p-3 cursor-grab active:cursor-grabbing", isDayMode ? "bg-white border-slate-900/10 shadow-sm" : "bg-zinc-900/80 border-white/10")}
+            >
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <span className={cn("truncate text-[11px] font-bold uppercase tracking-widest", isDayMode ? "text-slate-800" : "text-zinc-100")}>{sound.name}</span>
+                <span className={cn("h-2 w-2 rounded-full", sound.color || CLIP_COLOR_CLASSES[index % CLIP_COLOR_CLASSES.length])}></span>
+              </div>
+              <div className="flex h-8 items-end gap-1">
+                {[0.32, 0.68, 0.46, 0.88, 0.58, 0.76, 0.38, 0.66].map((height, i) => (
+                  <span key={i} className={cn("flex-1 rounded-t", sound.color || "bg-emerald-500")} style={{ height: `${height * 100}%`, opacity: 0.35 + i * 0.04 }} />
+                ))}
+              </div>
+              <div className={cn("mt-2 text-[9px] uppercase tracking-widest", mutedTextClass)}>
+                {sound.buffer ? `${sound.buffer.duration.toFixed(1)}s audio` : 'Pattern loop'}
+              </div>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <section className={cn("min-w-0 flex flex-col overflow-hidden", isDayMode ? "bg-slate-100" : "bg-[#09090b]")}>
+        <div className={cn("flex h-16 shrink-0 items-center justify-between border-b px-5", isDayMode ? "border-slate-900/10 bg-white/60" : "border-white/5 bg-zinc-950/80")}>
+          <div className="flex items-center gap-3">
+            <h1 className={cn("text-sm font-black uppercase tracking-[0.25em]", isDayMode ? "text-slate-900" : "text-white")}>Timeline</h1>
+            <span className={cn("text-[10px] uppercase tracking-widest", mutedTextClass)}>Drag, move, crop, copy, arrange</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className={cn("flex h-10 items-center gap-2 rounded-full border px-3 text-[10px] font-bold uppercase tracking-widest", softButtonClass)}>
+              <span className={mutedTextClass}>Length</span>
+              <input
+                type="number"
+                min="1"
+                max="600"
+                step="1"
+                value={timelineDuration}
+                onChange={handleTimelineDurationChange}
+                className={cn("w-14 bg-transparent text-right font-mono outline-none", isDayMode ? "text-slate-950" : "text-white")}
+                aria-label="Timeline total duration in seconds"
+              />
+              <span className={mutedTextClass}>s</span>
+            </label>
+            <button
+              onClick={rewindTimeline}
+              className={cn("flex h-10 w-10 items-center justify-center rounded-full border transition-colors", softButtonClass)}
+              aria-label="Return playhead to start"
+              title="Return playhead to start"
+            >
+              <SkipBack size={15} fill="currentColor" />
+            </button>
+            <button
+              onClick={isTimelinePlaying ? pauseTimeline : playTimeline}
+              className={cn(
+                "relative flex h-10 w-10 items-center justify-center rounded-full text-white shadow-[0_0_24px_rgba(16,185,129,0.22)] transition-colors",
+                isTimelinePlaying ? "bg-zinc-900 border border-emerald-400/30" : "bg-emerald-500"
+              )}
+              aria-label={isTimelinePlaying ? "Pause timeline" : "Play timeline"}
+              title={isTimelinePlaying ? "Pause timeline" : "Play timeline"}
+            >
+              {isTimelinePlaying && (
+                <span className="absolute -inset-1 rounded-full border border-emerald-400/25 border-t-emerald-100 animate-spin" />
+              )}
+              {isTimelinePlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
+            </button>
+            <button
+              onClick={jumpTimelineToEnd}
+              className={cn("flex h-10 w-10 items-center justify-center rounded-full border transition-colors", softButtonClass)}
+              aria-label="Jump playhead to end"
+              title="Jump playhead to end"
+            >
+              <SkipForward size={15} fill="currentColor" />
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="relative p-5" style={{ minWidth: 80 + timelineDuration * PIXELS_PER_SECOND + 40 }}>
+            <div className="ml-20 flex h-8 border-b border-white/10">
+              {Array.from({ length: Math.floor(timelineDuration) + 1 }).map((_, second) => (
+                <div key={second} className={cn("relative h-8 border-l text-[9px]", isDayMode ? "border-slate-900/10 text-slate-400" : "border-white/10 text-zinc-600")} style={{ width: PIXELS_PER_SECOND }}>
+                  <span className="absolute left-1 top-1">{second}s</span>
+                </div>
+              ))}
+            </div>
+
+            <div ref={timelineGridRef} className="relative space-y-2">
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-10 border-x border-emerald-300/60 bg-emerald-400/10"
+                style={{
+                  left: 80 + timelineLoopRange.start * PIXELS_PER_SECOND,
+                  width: Math.max(12, (timelineLoopRange.end - timelineLoopRange.start) * PIXELS_PER_SECOND),
+                }}
+              />
+              <div
+                className="absolute -top-8 z-40 h-8 rounded-t-lg border border-emerald-300/70 bg-emerald-400/20 shadow-[0_0_18px_rgba(52,211,153,0.22)]"
+                style={{
+                  left: 80 + timelineLoopRange.start * PIXELS_PER_SECOND,
+                  width: Math.max(28, (timelineLoopRange.end - timelineLoopRange.start) * PIXELS_PER_SECOND),
+                }}
+              >
+                <button
+                  type="button"
+                  onPointerDown={(e) => beginTimelineTransportEdit(e, 'range-start')}
+                  className="absolute left-0 top-0 h-full w-3 cursor-ew-resize rounded-tl-lg bg-emerald-200/70 hover:bg-white"
+                  aria-label="Adjust loop range start"
+                />
+                <button
+                  type="button"
+                  onPointerDown={(e) => beginTimelineTransportEdit(e, 'range-move')}
+                  className="absolute inset-x-3 top-0 h-full cursor-grab active:cursor-grabbing"
+                  aria-label="Move loop range"
+                >
+                  <span className="flex h-full items-center justify-center text-[9px] font-black uppercase tracking-widest text-emerald-50">
+                    {timelineLoopRange.start.toFixed(1)} - {timelineLoopRange.end.toFixed(1)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(e) => beginTimelineTransportEdit(e, 'range-end')}
+                  className="absolute right-0 top-0 h-full w-3 cursor-ew-resize rounded-tr-lg bg-emerald-200/70 hover:bg-white"
+                  aria-label="Adjust loop range end"
+                />
+              </div>
+              <div
+                onPointerDown={(e) => beginTimelineTransportEdit(e, 'playhead')}
+                className="absolute -top-8 bottom-0 z-50 w-5 -translate-x-1/2 cursor-ew-resize touch-none"
+                style={{ left: 80 + timelinePlayhead * PIXELS_PER_SECOND }}
+                aria-label="Drag playhead"
+              >
+                <span className="absolute left-1/2 top-0 -translate-x-1/2 rounded bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-[0_0_16px_rgba(16,185,129,0.5)]">
+                  {timelinePlayhead.toFixed(1)}
+                </span>
+                <span className="absolute bottom-0 left-1/2 top-5 w-px -translate-x-1/2 bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.65)]" />
+              </div>
+              {Array.from({ length: TIMELINE_TRACKS }).map((_, track) => (
+                <div key={track} className="grid grid-cols-[80px_minmax(0,1fr)]">
+                  <div className={cn("flex h-24 items-center border-r pr-3 text-right text-[10px] font-bold uppercase tracking-widest", isDayMode ? "border-slate-900/10 text-slate-500" : "border-white/10 text-zinc-500")}>
+                    Track {track + 1}
+                  </div>
+                  <div
+                    onDrop={(e) => handleTimelineDrop(e, track)}
+                    onDragOver={handleDragOver}
+                    onPointerDown={handleTimelineSurfacePointerDown}
+                    className={cn("relative h-24 overflow-hidden border-b", isDayMode ? "border-slate-900/10 bg-white/45" : "border-white/5 bg-white/[0.025]")}
+                    style={{
+                      backgroundImage: isDayMode
+                        ? `linear-gradient(90deg, rgba(15,23,42,0.08) 1px, transparent 1px)`
+                        : `linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)`,
+                      backgroundSize: `${PIXELS_PER_SECOND}px 100%`,
+                    }}
+                  >
+                    {timelineClips.filter(clip => clip.track === track).map(clip => {
+                      const sound = getSoundById(clip.soundId);
+                      const selected = selectedTimelineClipId === clip.id;
+                      return (
+                        <div
+                          key={clip.id}
+                          draggable={false}
+                          onPointerDown={(e) => beginTimelineEdit(e, clip, 'move')}
+                          onClick={() => setSelectedTimelineClipId(clip.id)}
+                          className={cn(
+                            "absolute top-3 h-[68px] rounded-md border p-2 shadow-lg cursor-move overflow-hidden touch-none",
+                            selected ? "border-white/80 ring-2 ring-emerald-400/60" : "border-white/20",
+                            sound?.color || "bg-emerald-500"
+                          )}
+                          style={{ left: clip.start * PIXELS_PER_SECOND, width: Math.max(46, clip.duration * PIXELS_PER_SECOND) }}
+                        >
+                          <button
+                            type="button"
+                            onPointerDown={(e) => beginTimelineEdit(e, clip, 'trim-start')}
+                            className="absolute left-0 top-0 z-20 h-full w-3 cursor-ew-resize bg-white/20 hover:bg-white/45"
+                            aria-label="Trim clip start"
+                          />
+                          <button
+                            type="button"
+                            onPointerDown={(e) => beginTimelineEdit(e, clip, 'trim-end')}
+                            className="absolute right-0 top-0 z-20 h-full w-3 cursor-ew-resize bg-white/20 hover:bg-white/45"
+                            aria-label="Trim clip end"
+                          />
+                          <div className="flex items-center justify-between gap-2 text-white">
+                            <span className="truncate text-[10px] font-black uppercase tracking-widest">{sound?.name ?? 'Clip'}</span>
+                            <MoveHorizontal size={12} />
+                          </div>
+                          <div className="mt-2 flex h-4 items-end gap-0.5 opacity-65">
+                            {[0.3, 0.72, 0.44, 0.86, 0.52, 0.68, 0.35, 0.8, 0.48, 0.64].map((height, index) => (
+                              <span key={index} className="flex-1 rounded-t bg-white" style={{ height: `${height * 100}%` }} />
+                            ))}
+                          </div>
+                          <div className="absolute bottom-1 left-2 right-2 flex items-center justify-between text-[8px] font-bold uppercase tracking-widest text-white/75">
+                            <span>{clip.duration.toFixed(1)}s</span>
+                            <span>trim {clip.trimStart.toFixed(1)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className={cn("flex h-16 shrink-0 items-center gap-3 border-t px-5", isDayMode ? "border-slate-900/10 bg-white/75" : "border-white/5 bg-zinc-950/90")}>
+          <button
+            onClick={() => selectedTimelineClipId && duplicateTimelineClip(selectedTimelineClipId)}
+            disabled={!selectedTimelineClipId}
+            className={cn("flex h-9 items-center gap-2 rounded border px-3 text-[10px] font-bold uppercase tracking-widest disabled:opacity-35", softButtonClass)}
+          >
+            <Copy size={12} />
+            Copy
+          </button>
+          <button
+            onClick={() => selectedTimelineClipId && cropTimelineClip(selectedTimelineClipId, 'left', 0.25)}
+            disabled={!selectedTimelineClipId}
+            className={cn("flex h-9 items-center gap-2 rounded border px-3 text-[10px] font-bold uppercase tracking-widest disabled:opacity-35", softButtonClass)}
+          >
+            <Scissors size={12} />
+            Trim In
+          </button>
+          <button
+            onClick={() => selectedTimelineClipId && cropTimelineClip(selectedTimelineClipId, 'right', -0.25)}
+            disabled={!selectedTimelineClipId}
+            className={cn("flex h-9 items-center gap-2 rounded border px-3 text-[10px] font-bold uppercase tracking-widest disabled:opacity-35", softButtonClass)}
+          >
+            <Scissors size={12} />
+            Trim Out
+          </button>
+          <button
+            onClick={() => selectedTimelineClipId && setTimelineClips(prev => prev.filter(clip => clip.id !== selectedTimelineClipId))}
+            disabled={!selectedTimelineClipId}
+            className="flex h-9 items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 text-[10px] font-bold uppercase tracking-widest text-red-300 disabled:opacity-35"
+          >
+            <Trash2 size={12} />
+            Delete
+          </button>
+        </div>
+      </section>
+    </main>
+  );
 
   const handleClearSlot = (index: number) => {
     const newSlots = [...activeTab.slots];
@@ -1717,10 +2652,10 @@ export default function App() {
       
       {/* Header / Tabs */}
       <header className={cn(
-        "px-6 flex flex-shrink-0 items-end justify-between border-b backdrop-blur-md z-10 w-full pt-4",
+        "px-4 sm:px-6 flex flex-shrink-0 items-end justify-between gap-3 border-b backdrop-blur-md z-10 w-full pt-4",
         isDayMode ? "border-slate-900/10 bg-white/80" : "border-white/5 bg-black/40"
       )}>
-        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-0 w-full md:w-auto">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none pb-0">
           {tabs.map((tab) => {
             const isQueued = pendingPlayIds.has(tab.id);
             return (
@@ -1824,8 +2759,43 @@ export default function App() {
           </button>
         </div>
 
+        <div className="flex shrink-0 items-center gap-2 pb-3">
+          <button
+             onClick={toggleGlobalRecording}
+             aria-label={isGlobalRecording ? 'Stop global arrangement recording' : 'Start global arrangement recording'}
+             title={isGlobalRecording ? 'Stop global arrangement recording' : 'Start global arrangement recording'}
+             className={cn(
+               "h-10 rounded-full border px-3 sm:px-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all shadow-sm",
+               isGlobalRecording
+                 ? "bg-red-500 text-white border-red-400 animate-pulse shadow-[0_0_24px_rgba(239,68,68,0.28)]"
+                 : isDayMode ? "bg-slate-900 text-white border-slate-900 hover:bg-slate-700" : "bg-white text-zinc-950 border-white hover:bg-zinc-200"
+             )}
+          >
+             <Circle className={cn("w-3.5 h-3.5", isGlobalRecording ? "fill-white" : "fill-red-500 text-red-500")} />
+             <span className="hidden sm:inline">{isGlobalRecording ? `Recording ${arrangementEvents.length}` : 'Arrange Rec'}</span>
+             <span className="sm:hidden">{isGlobalRecording ? arrangementEvents.length : 'Rec'}</span>
+          </button>
+          <button
+             onClick={() => setViewMode(prev => prev === 'timeline' ? 'matrix' : 'timeline')}
+             aria-label="Switch timeline view"
+             title="Switch timeline view"
+             className={cn(
+               "h-10 rounded-full border px-3 sm:px-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all shadow-sm",
+               viewMode === 'timeline'
+                 ? "bg-emerald-500 text-white border-emerald-400"
+                 : isDayMode ? "bg-slate-900/5 text-slate-600 hover:bg-white hover:text-slate-950 border-slate-900/10" : "bg-black/20 text-zinc-400 hover:bg-white/10 hover:text-white border-white/10"
+             )}
+          >
+             {viewMode === 'timeline' ? <SkipBack className="w-4 h-4" /> : <ListMusic className="w-4 h-4" />}
+             <span className="hidden sm:inline">{viewMode === 'timeline' ? 'Matrix' : 'Timeline'}</span>
+             <span className="sm:hidden">{viewMode === 'timeline' ? 'Back' : 'Line'}</span>
+          </button>
+        </div>
+
       </header>
 
+      {viewMode === 'timeline' ? renderTimelinePage() : (
+      <>
       {/* Main Content Area */}
       <main className="min-h-0 flex-1 w-full flex flex-col p-6 gap-5 overflow-hidden">
         <section className="shrink-0 flex items-center gap-3 overflow-x-auto pb-1 text-[10px] font-medium uppercase tracking-widest scrollbar-none">
@@ -2287,6 +3257,8 @@ export default function App() {
         </section>
         
       </main>
+      </>
+      )}
 
       {/* Floating Keyboard */}
       <AnimatePresence>
