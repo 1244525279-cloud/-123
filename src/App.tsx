@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AUDIO_STYLES, AVAILABLE_SOUNDS, AudioStyleId, SoundDef, engineManager, FxParams, defaultFx, KEYBOARD_NOTES } from './audio';
 import { cn } from './lib/utils';
 import { createShowControlClient, type AudioFrameMessage, type ControlCommand } from './lib/showControlClient';
+import { STYLE_PRESETS, LIVE_FX_PRESETS, type LiveFxKind, type StylePreset, type LiveFxPreset } from './presets';
 
 const KEYBOARD_INSTRUMENT_MODES = [
   { id: 'piano', name: 'Piano', color: 'bg-blue-500', waveform: 'sine' as OscillatorType },
@@ -16,34 +17,12 @@ const KEYBOARD_PHYSICAL_KEYS = ['a','s','d','f','g','h','j','k','l','q','w','e',
 const KEYBOARD_NOTE_LABELS = ['C4','C#4','D4','D#4','E4','F4','F#4','G4','G#4','A4','A#4','B4','C5','C#5','D5','D#5'];
 const FLAT_KEYBOARD_NOTES = KEYBOARD_NOTES.flat();
 
-type LiveFxKind = 'heartbeat' | 'atmosphere' | 'riser' | 'impact' | 'stutter' | 'air' | 'alarm' | 'spark';
-
-interface LiveFxPreset {
-  id: LiveFxKind;
-  name: string;
-  key: string;
-  label: string;
-  color: string;
-  duration: number;
-}
-
 interface LiveFxControls {
   speed: number;
   volume: number;
   fadeIn: number;
   fadeOut: number;
 }
-
-const LIVE_FX_PRESETS: LiveFxPreset[] = [
-  { id: 'heartbeat', name: 'Heartbeat', key: '1', label: 'Pulse tension', color: 'bg-red-500', duration: 4.2 },
-  { id: 'atmosphere', name: 'Atmosphere', key: '2', label: 'Dark room bed', color: 'bg-indigo-500', duration: 5.2 },
-  { id: 'riser', name: 'Riser', key: '3', label: 'Build transition', color: 'bg-cyan-500', duration: 3.4 },
-  { id: 'impact', name: 'Impact', key: '4', label: 'Scene hit', color: 'bg-orange-500', duration: 2.4 },
-  { id: 'stutter', name: 'Stutter', key: '5', label: 'Glitch cue', color: 'bg-fuchsia-500', duration: 2.1 },
-  { id: 'air', name: 'Air Wash', key: '6', label: 'Soft sweep', color: 'bg-sky-500', duration: 4.5 },
-  { id: 'alarm', name: 'Warning', key: '7', label: 'Alert pulse', color: 'bg-amber-500', duration: 3.2 },
-  { id: 'spark', name: 'Sparkle', key: '8', label: 'Bright accent', color: 'bg-emerald-500', duration: 2.6 },
-];
 
 interface TabData {
   id: string;
@@ -98,18 +77,6 @@ interface TimelineTransportEdit {
   wasPlaying: boolean;
 }
 
-interface StylePreset {
-  id: string;
-  name: string;
-  slotIds: string[];
-  accent: string;
-  glow: string;
-  panel: string;
-  energy: number[];
-  fxSlots: FxParams[];
-  masterFx: FxParams;
-}
-
 type ColorMode = 'night' | 'day';
 type AudioTransportState = 'stopped' | 'playing' | 'paused';
 
@@ -155,275 +122,6 @@ const makeFx = (overrides: Partial<FxParams> = {}): FxParams => ({
   ...defaultFx(),
   ...overrides,
 });
-
-const STYLE_PRESETS: StylePreset[] = [
-  {
-    id: 'neon',
-    name: 'Neon Loop',
-    slotIds: ['b1', 'e5', 's3', 't6', 't3', 'm5', 'x1'],
-    accent: '#34d399',
-    glow: 'rgba(52, 211, 153, 0.32)',
-    panel: 'rgba(16, 185, 129, 0.08)',
-    energy: [1, 0.36, 0.7, 0.42, 0.94, 0.38, 0.78, 0.44, 1, 0.34, 0.72, 0.4, 0.92, 0.36, 0.76, 0.48],
-    fxSlots: [
-      makeFx({ volume: 92, compressor: 32 }),
-      makeFx({ hpf: 8, volume: 58, panSwing: 18 }),
-      makeFx({ lpf: 62, volume: 86, sidechain: 30, compressor: 46 }),
-      makeFx({ lpf: 55, volume: 46, sidechain: 22, reverb: 36 }),
-      makeFx({ lpf: 72, volume: 54, delay: 12, reverb: 24 }),
-      makeFx({ hpf: 12, volume: 48, delay: 34, panSwing: 30 }),
-      makeFx({ hpf: 18, volume: 28, delay: 16, flanger: 26 }),
-    ],
-    masterFx: makeFx({ volume: 88, compressor: 18, reverb: 8 }),
-  },
-  {
-    id: 'warehouse',
-    name: 'Warehouse',
-    slotIds: ['b3', 'e3', 's4', 'm2', 't4', 'e4', 'x2'],
-    accent: '#60a5fa',
-    glow: 'rgba(96, 165, 250, 0.3)',
-    panel: 'rgba(37, 99, 235, 0.09)',
-    energy: [1, 0.52, 0.82, 0.55, 1, 0.5, 0.85, 0.58, 1, 0.5, 0.82, 0.54, 1, 0.5, 0.9, 0.62],
-    fxSlots: [
-      makeFx({ volume: 96, compressor: 48 }),
-      makeFx({ hpf: 18, volume: 42, panSwing: 10 }),
-      makeFx({ lpf: 50, volume: 92, sidechain: 42, compressor: 58 }),
-      makeFx({ lpf: 68, volume: 52, delay: 18 }),
-      makeFx({ hpf: 8, lpf: 70, volume: 46, reverb: 20 }),
-      makeFx({ hpf: 14, volume: 38, reverb: 12 }),
-      makeFx({ hpf: 22, volume: 24, delay: 24, flanger: 34 }),
-    ],
-    masterFx: makeFx({ volume: 90, compressor: 30 }),
-  },
-  {
-    id: 'dream',
-    name: 'Dream Pop',
-    slotIds: ['b2', 'e2', 's1', 'm1', 't6', 'm5', 'x3'],
-    accent: '#f472b6',
-    glow: 'rgba(244, 114, 182, 0.3)',
-    panel: 'rgba(219, 39, 119, 0.08)',
-    energy: [0.8, 0.34, 0.62, 0.38, 0.72, 0.34, 0.64, 0.44, 0.78, 0.32, 0.58, 0.38, 0.68, 0.34, 0.62, 0.48],
-    fxSlots: [
-      makeFx({ volume: 72, compressor: 18 }),
-      makeFx({ hpf: 12, volume: 36, panSwing: 28 }),
-      makeFx({ lpf: 48, volume: 64, sidechain: 20 }),
-      makeFx({ lpf: 58, volume: 54, reverb: 48, delay: 18 }),
-      makeFx({ lpf: 42, volume: 50, sidechain: 18, reverb: 58 }),
-      makeFx({ hpf: 20, volume: 44, delay: 42, panSwing: 44 }),
-      makeFx({ hpf: 8, volume: 18, reverb: 35, flanger: 18 }),
-    ],
-    masterFx: makeFx({ volume: 82, reverb: 18, compressor: 12 }),
-  },
-  {
-    id: 'breaks',
-    name: 'Break Lab',
-    slotIds: ['b2', 'e5', 's5', 'm4', 't2', 'e1', 'x1'],
-    accent: '#f97316',
-    glow: 'rgba(249, 115, 22, 0.28)',
-    panel: 'rgba(234, 88, 12, 0.08)',
-    energy: [1, 0.42, 0.68, 0.54, 0.88, 0.5, 0.76, 0.44, 0.94, 0.38, 0.82, 0.52, 0.9, 0.44, 0.72, 0.58],
-    fxSlots: [
-      makeFx({ volume: 94, compressor: 40 }),
-      makeFx({ hpf: 10, volume: 54, panSwing: 24 }),
-      makeFx({ lpf: 58, volume: 84, sidechain: 24, compressor: 36 }),
-      makeFx({ lpf: 74, volume: 56, delay: 10 }),
-      makeFx({ lpf: 66, volume: 50, reverb: 18 }),
-      makeFx({ hpf: 18, volume: 38, panSwing: 36 }),
-      makeFx({ hpf: 20, volume: 32, delay: 20, flanger: 24 }),
-    ],
-    masterFx: makeFx({ volume: 88, compressor: 24, reverb: 6 }),
-  },
-  {
-    id: 'indie',
-    name: 'Indie Band',
-    slotIds: ['b6', 'e6', 's8', 'm8', 't7', 'm6', 'x7'],
-    accent: '#a3e635',
-    glow: 'rgba(163, 230, 53, 0.24)',
-    panel: 'rgba(101, 163, 13, 0.08)',
-    energy: [0.92, 0.4, 0.66, 0.5, 0.86, 0.36, 0.72, 0.48, 0.94, 0.38, 0.7, 0.46, 0.84, 0.4, 0.68, 0.52],
-    fxSlots: [
-      makeFx({ volume: 88, compressor: 34 }),
-      makeFx({ hpf: 14, volume: 46, panSwing: 18 }),
-      makeFx({ lpf: 58, volume: 78, compressor: 22 }),
-      makeFx({ hpf: 10, lpf: 76, volume: 56, reverb: 14 }),
-      makeFx({ lpf: 74, volume: 52, delay: 10, reverb: 18 }),
-      makeFx({ lpf: 82, volume: 44, delay: 16 }),
-      makeFx({ hpf: 22, volume: 16, reverb: 28 }),
-    ],
-    masterFx: makeFx({ volume: 86, compressor: 18, reverb: 6 }),
-  },
-  {
-    id: 'rnb',
-    name: 'R&B Studio',
-    slotIds: ['b7', 'e7', 's7', 'm6', 't8', 'm9', 'x6'],
-    accent: '#c084fc',
-    glow: 'rgba(192, 132, 252, 0.24)',
-    panel: 'rgba(126, 34, 206, 0.08)',
-    energy: [0.78, 0.34, 0.52, 0.44, 0.74, 0.36, 0.58, 0.5, 0.82, 0.32, 0.54, 0.42, 0.72, 0.34, 0.6, 0.48],
-    fxSlots: [
-      makeFx({ volume: 76, compressor: 18 }),
-      makeFx({ hpf: 18, volume: 34, panSwing: 34 }),
-      makeFx({ lpf: 50, volume: 76, sidechain: 12, compressor: 28 }),
-      makeFx({ lpf: 66, volume: 50, reverb: 32, delay: 16 }),
-      makeFx({ lpf: 72, volume: 48, delay: 22, reverb: 24 }),
-      makeFx({ hpf: 20, volume: 34, delay: 40, panSwing: 38 }),
-      makeFx({ hpf: 24, volume: 12, flanger: 12 }),
-    ],
-    masterFx: makeFx({ volume: 82, compressor: 14, reverb: 12 }),
-  },
-  {
-    id: 'cinematic',
-    name: 'Cinematic',
-    slotIds: ['b9', 'e8', 's8', 't9', 'm9', 't5', 'x7'],
-    accent: '#facc15',
-    glow: 'rgba(250, 204, 21, 0.22)',
-    panel: 'rgba(202, 138, 4, 0.08)',
-    energy: [0.7, 0.24, 0.38, 0.28, 0.62, 0.24, 0.42, 0.32, 0.82, 0.26, 0.5, 0.34, 0.72, 0.24, 0.44, 0.4],
-    fxSlots: [
-      makeFx({ lpf: 62, volume: 64, compressor: 12, reverb: 20 }),
-      makeFx({ hpf: 22, volume: 24, reverb: 30 }),
-      makeFx({ lpf: 42, volume: 60, reverb: 24 }),
-      makeFx({ lpf: 48, volume: 58, reverb: 68, delay: 18 }),
-      makeFx({ hpf: 18, lpf: 70, volume: 36, delay: 44, reverb: 48 }),
-      makeFx({ lpf: 60, volume: 38, reverb: 54 }),
-      makeFx({ hpf: 18, volume: 20, delay: 30, reverb: 40 }),
-    ],
-    masterFx: makeFx({ volume: 78, reverb: 26, compressor: 10 }),
-  },
-  {
-    id: 'latin',
-    name: 'Latin Pop',
-    slotIds: ['b8', 'e6', 's7', 'm8', 't10', 'e9', 'x5'],
-    accent: '#fb7185',
-    glow: 'rgba(251, 113, 133, 0.24)',
-    panel: 'rgba(225, 29, 72, 0.08)',
-    energy: [0.96, 0.48, 0.7, 0.58, 0.9, 0.5, 0.76, 0.56, 0.98, 0.46, 0.72, 0.58, 0.88, 0.48, 0.74, 0.62],
-    fxSlots: [
-      makeFx({ volume: 88, compressor: 26 }),
-      makeFx({ hpf: 16, volume: 48, panSwing: 30 }),
-      makeFx({ lpf: 56, volume: 74, compressor: 22 }),
-      makeFx({ hpf: 12, lpf: 78, volume: 50, reverb: 18 }),
-      makeFx({ lpf: 78, volume: 52, delay: 14, reverb: 16 }),
-      makeFx({ hpf: 20, volume: 34, panSwing: 48 }),
-      makeFx({ hpf: 16, volume: 18, delay: 18, flanger: 16 }),
-    ],
-    masterFx: makeFx({ volume: 86, compressor: 18, reverb: 8 }),
-  },
-  {
-    id: 'neo-soul',
-    name: 'Neo Soul R&B',
-    slotIds: ['b10', 'e10', 's13', 'm10', 't11', 'm15', 'x9'],
-    accent: '#d8b4fe',
-    glow: 'rgba(216, 180, 254, 0.22)',
-    panel: 'rgba(147, 51, 234, 0.07)',
-    energy: [0.74, 0.3, 0.5, 0.42, 0.7, 0.34, 0.58, 0.46, 0.78, 0.32, 0.52, 0.42, 0.68, 0.34, 0.56, 0.48],
-    fxSlots: [
-      makeFx({ volume: 72, compressor: 16, reverb: 8 }),
-      makeFx({ hpf: 16, volume: 30, panSwing: 42 }),
-      makeFx({ lpf: 44, volume: 76, compressor: 24, sidechain: 8 }),
-      makeFx({ lpf: 58, volume: 52, reverb: 42, delay: 18 }),
-      makeFx({ lpf: 70, volume: 46, reverb: 30, delay: 22 }),
-      makeFx({ lpf: 46, volume: 34, reverb: 56 }),
-      makeFx({ hpf: 20, volume: 12, delay: 20, flanger: 10 }),
-    ],
-    masterFx: makeFx({ volume: 80, compressor: 12, reverb: 14 }),
-  },
-  {
-    id: 'edm',
-    name: 'EDM Festival',
-    slotIds: ['b11', 'e11', 's12', 'm11', 't12', 't16', 'x8'],
-    accent: '#22d3ee',
-    glow: 'rgba(34, 211, 238, 0.24)',
-    panel: 'rgba(8, 145, 178, 0.08)',
-    energy: [1, 0.54, 0.9, 0.58, 1, 0.56, 0.94, 0.62, 1, 0.54, 0.92, 0.58, 1, 0.56, 0.96, 0.66],
-    fxSlots: [
-      makeFx({ volume: 94, compressor: 42 }),
-      makeFx({ hpf: 18, volume: 40, panSwing: 12 }),
-      makeFx({ lpf: 72, volume: 86, sidechain: 58, compressor: 52 }),
-      makeFx({ hpf: 8, lpf: 82, volume: 54, delay: 18 }),
-      makeFx({ lpf: 88, volume: 58, sidechain: 34, delay: 18, reverb: 16 }),
-      makeFx({ hpf: 10, volume: 42, delay: 32, panSwing: 30 }),
-      makeFx({ hpf: 20, volume: 26, delay: 22, flanger: 28 }),
-    ],
-    masterFx: makeFx({ volume: 88, compressor: 34, reverb: 6 }),
-  },
-  {
-    id: 'hiphop',
-    name: 'Hip Hop Tape',
-    slotIds: ['b12', 'e12', 's14', 'm12', 't13', 'm10', 'x9'],
-    accent: '#fbbf24',
-    glow: 'rgba(251, 191, 36, 0.22)',
-    panel: 'rgba(180, 83, 9, 0.07)',
-    energy: [0.9, 0.32, 0.62, 0.42, 0.84, 0.34, 0.58, 0.48, 0.9, 0.3, 0.64, 0.4, 0.82, 0.34, 0.6, 0.5],
-    fxSlots: [
-      makeFx({ volume: 86, compressor: 34 }),
-      makeFx({ hpf: 16, volume: 38, panSwing: 20 }),
-      makeFx({ lpf: 40, volume: 82, compressor: 28 }),
-      makeFx({ lpf: 56, volume: 44, reverb: 24 }),
-      makeFx({ lpf: 68, volume: 46, delay: 14, reverb: 16 }),
-      makeFx({ hpf: 8, lpf: 60, volume: 32, reverb: 28 }),
-      makeFx({ hpf: 14, volume: 20, delay: 18, flanger: 8 }),
-    ],
-    masterFx: makeFx({ volume: 84, compressor: 24, reverb: 8 }),
-  },
-  {
-    id: 'drill',
-    name: 'Drill Bells',
-    slotIds: ['b13', 'e13', 's10', 'm13', 't13', 'e12', 'x5'],
-    accent: '#818cf8',
-    glow: 'rgba(129, 140, 248, 0.24)',
-    panel: 'rgba(67, 56, 202, 0.08)',
-    energy: [0.88, 0.42, 0.68, 0.48, 0.9, 0.42, 0.72, 0.52, 0.92, 0.44, 0.7, 0.5, 0.86, 0.42, 0.74, 0.56],
-    fxSlots: [
-      makeFx({ volume: 84, compressor: 30 }),
-      makeFx({ hpf: 20, volume: 34, panSwing: 34 }),
-      makeFx({ lpf: 46, volume: 86, sidechain: 10, pitch: -2, compressor: 34 }),
-      makeFx({ hpf: 14, lpf: 62, volume: 48, delay: 30, reverb: 22 }),
-      makeFx({ hpf: 8, lpf: 70, volume: 42, delay: 18 }),
-      makeFx({ hpf: 18, volume: 26, panSwing: 42 }),
-      makeFx({ hpf: 16, volume: 16, delay: 24, flanger: 18 }),
-    ],
-    masterFx: makeFx({ volume: 82, compressor: 22, reverb: 10 }),
-  },
-  {
-    id: 'dub-bass',
-    name: 'Echo Bass',
-    slotIds: ['b14', 'e14', 's11', 'm14', 't14', 'e9', 'x10'],
-    accent: '#2dd4bf',
-    glow: 'rgba(45, 212, 191, 0.24)',
-    panel: 'rgba(13, 148, 136, 0.08)',
-    energy: [0.96, 0.3, 0.54, 0.36, 0.78, 0.3, 0.58, 0.42, 0.96, 0.32, 0.56, 0.38, 0.84, 0.3, 0.62, 0.46],
-    fxSlots: [
-      makeFx({ lpf: 66, volume: 80, compressor: 24, reverb: 10 }),
-      makeFx({ hpf: 18, volume: 26, delay: 44, reverb: 18 }),
-      makeFx({ lpf: 38, volume: 90, sidechain: 22, flanger: 20, compressor: 36 }),
-      makeFx({ hpf: 12, lpf: 54, volume: 40, delay: 56, reverb: 30 }),
-      makeFx({ lpf: 46, volume: 50, sidechain: 18, flanger: 18 }),
-      makeFx({ hpf: 22, volume: 24, panSwing: 46 }),
-      makeFx({ hpf: 16, volume: 20, delay: 60, reverb: 26 }),
-    ],
-    masterFx: makeFx({ volume: 82, compressor: 20, reverb: 16 }),
-  },
-  {
-    id: 'afro-rnb',
-    name: 'Afro R&B',
-    slotIds: ['b15', 'e15', 's15', 'm8', 't15', 'm15', 'x6'],
-    accent: '#fb923c',
-    glow: 'rgba(251, 146, 60, 0.22)',
-    panel: 'rgba(194, 65, 12, 0.08)',
-    energy: [0.94, 0.46, 0.7, 0.54, 0.88, 0.48, 0.76, 0.58, 0.96, 0.44, 0.72, 0.54, 0.86, 0.48, 0.78, 0.6],
-    fxSlots: [
-      makeFx({ volume: 84, compressor: 22 }),
-      makeFx({ hpf: 16, volume: 42, panSwing: 36 }),
-      makeFx({ lpf: 54, volume: 78, compressor: 22 }),
-      makeFx({ hpf: 10, lpf: 78, volume: 48, reverb: 16 }),
-      makeFx({ lpf: 72, volume: 50, delay: 16, reverb: 18 }),
-      makeFx({ lpf: 48, volume: 34, reverb: 44 }),
-      makeFx({ hpf: 18, volume: 14, delay: 16, flanger: 12 }),
-    ],
-    masterFx: makeFx({ volume: 84, compressor: 18, reverb: 8 }),
-  },
-];
 
 const STORAGE_KEY = 'codex-music-workbench-v1';
 const COLOR_MODE_STORAGE_KEY = 'codex-music-workbench-color-mode';
@@ -716,6 +414,7 @@ export default function App() {
   const [tabs, setTabs] = useState<TabData[]>(() => initialWorkbench?.tabs ?? [createCodexSongTab()]);
   const [selectedStyleId, setSelectedStyleId] = useState(initialWorkbench?.styleId ?? STYLE_PRESETS[0].id);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'loaded'>('idle');
+  const [userPresets, setUserPresets] = useState<StylePreset[]>([]);
   const [colorMode, setColorMode] = useState<ColorMode>(hydrateColorMode);
   const [pendingPlayIds, setPendingPlayIds] = useState<Set<string>>(() => new Set());
   const [viewMode, setViewMode] = useState<ViewMode>('matrix');
@@ -756,6 +455,7 @@ export default function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
+  const importSongAsPresetInputRef = useRef<HTMLInputElement>(null);
   const globalRecordStartedAtRef = useRef<number>(0);
   const globalRecorderRef = useRef<MediaRecorder | null>(null);
   const globalRecordChunksRef = useRef<Blob[]>([]);
@@ -870,6 +570,17 @@ export default function App() {
   }, [colorMode]);
 
   useEffect(() => {
+    const savedUserPresets = window.localStorage.getItem('codex-user-presets');
+    if (savedUserPresets) {
+      try {
+        setUserPresets(JSON.parse(savedUserPresets));
+      } catch (e) {
+        console.error('Failed to load user presets', e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     if (!isKeyboardVisible) return;
 
     const handleKeydown = (e: KeyboardEvent) => {
@@ -959,7 +670,7 @@ export default function App() {
   };
 
   const applyStylePreset = (styleId: string, tabId = activeTabId) => {
-    const preset = STYLE_PRESETS.find((style) => style.id === styleId) ?? STYLE_PRESETS[0];
+    const preset = [...STYLE_PRESETS, ...userPresets].find((style) => style.id === styleId) ?? STYLE_PRESETS[0];
     const targetTab = tabs.find(tab => tab.id === tabId) ?? activeTab;
     const styledTab = createStyleTab(preset, targetTab.id, targetTab.styleId);
     const nextTab = {
@@ -1742,7 +1453,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `arrangement-${Date.now()}.musicarr`;
+      anchor.download = `arrangement-${Date.now()}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -1751,12 +1462,119 @@ export default function App() {
     }
   };
 
+  const handleExportStylePreset = () => {
+    try {
+      if (!activeStyle) {
+        alert('没有选择有效的样式预设。');
+        return;
+      }
+
+      // Export the current state of the active tab as a StylePreset
+      // This ensures that any modifications made to FX or slots are preserved
+      // and the resulting JSON is compatible with the preset loading logic
+      const currentPreset: StylePreset = {
+        ...activeStyle,
+        id: `${activeStyle.id}-${Date.now()}`,
+        name: activeTab.name,
+        slotIds: activeTab.slots.map((slot) => slot?.id ?? ''),
+        fxSlots: activeTab.fxSlots,
+        masterFx: activeTab.masterFx,
+      };
+      
+      const blob = new Blob([JSON.stringify(currentPreset, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${currentPreset.id}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('导出样式预设失败', err);
+      alert('导出样式预设失败，请重试。');
+    }
+  };
+
+  const handleExportAllPresets = () => {
+    try {
+      // 一次导出所有样式预设
+      STYLE_PRESETS.forEach((preset) => {
+        const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${preset.id}.json`;
+        
+        // 添加小延迟以避免浏览器限制
+        setTimeout(() => {
+          anchor.click();
+          URL.revokeObjectURL(url);
+        }, 100);
+      });
+    } catch (err) {
+      console.error('导出所有预设失败', err);
+      alert('导出所有预设失败，请重试。');
+    }
+  };
+
+  const handleImportSongAsPreset = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.json')) {
+      alert('请选择 .json 歌曲文件。');
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as MusicArrFile;
+      
+      if (!data || !Array.isArray(data.tabs) || data.tabs.length === 0) {
+        throw new Error('无效的歌曲文件格式或没有标签页');
+      }
+
+      // 提取第一个标签页作为预设
+      const firstTab = data.tabs[0];
+      
+      // 寻找基础样式以获取视觉属性 (accent, glow, panel, energy)
+      const baseStyle = STYLE_PRESETS.find(s => s.id === firstTab.styleId) ?? STYLE_PRESETS[0];
+
+      const preset: StylePreset = {
+        ...baseStyle,
+        id: `imported-${Date.now()}`,
+        name: firstTab.name,
+        slotIds: firstTab.slots.map(slot => slot?.id ?? ''),
+        fxSlots: firstTab.moduleFx ?? firstTab.fxSlots ?? new Array(7).fill(null).map(defaultFx),
+        masterFx: firstTab.masterFx,
+      };
+
+      const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${preset.id}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      
+      // 保存到用户预设库
+      const nextUserPresets = [...userPresets, preset];
+      setUserPresets(nextUserPresets);
+      window.localStorage.setItem('codex-user-presets', JSON.stringify(nextUserPresets));
+      
+      alert('歌曲已成功导入曲库！您现在可以在 Preset 下拉列表中找到它。');
+    } catch (err) {
+      console.error('Conversion failed', err);
+      alert('转换失败，请确保上传的是正确的歌曲导出文件。');
+    }
+    event.target.value = '';
+  };
+
   const handleImportArrangement = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith('.musicarr')) {
-      alert('请选择 .musicarr 文件进行导入。');
+    if (!file.name.endsWith('.json')) {
+      alert('请选择 .json 文件进行导入。');
       event.target.value = '';
       return;
     }
@@ -3290,13 +3108,19 @@ export default function App() {
              onClick={handleExportArrangement}
              className="px-3 py-2 rounded-lg bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white text-[9px] font-bold uppercase tracking-widest transition-all"
           >
-             Export
+             Export Project
+          </button>
+          <button
+             onClick={handleExportStylePreset}
+             className="px-3 py-2 rounded-lg bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white text-[9px] font-bold uppercase tracking-widest transition-all"
+          >
+             Export Preset
           </button>
           <button
              onClick={() => importFileInputRef.current?.click()}
              className="px-3 py-2 rounded-lg bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white text-[9px] font-bold uppercase tracking-widest transition-all"
           >
-             Import
+             Import Project
           </button>
           <input
             type="file"
@@ -3304,6 +3128,19 @@ export default function App() {
             className="hidden"
             ref={importFileInputRef}
             onChange={handleImportArrangement}
+          />
+          <button
+             onClick={() => importSongAsPresetInputRef.current?.click()}
+             className="px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 text-[9px] font-bold uppercase tracking-widest transition-all"
+          >
+             Import Song as Preset
+          </button>
+          <input
+            type="file"
+            accept=".json"
+            className="hidden"
+            ref={importSongAsPresetInputRef}
+            onChange={handleImportSongAsPreset}
           />
           <button
              onClick={() => setIsKeyboardVisible(true)}
@@ -3384,11 +3221,22 @@ export default function App() {
               className={cn("bg-transparent text-[10px] font-bold uppercase tracking-widest outline-none", isDayMode ? "text-slate-950" : "text-white")}
               title="Switch loops, FX, and visual energy while keeping the current Sound Style"
             >
-              {STYLE_PRESETS.map((style) => (
-                <option key={style.id} value={style.id} className={isDayMode ? "bg-white text-slate-950" : "bg-zinc-900 text-white"}>
-                  {style.name}
-                </option>
-              ))}
+              <optgroup label="Official Presets">
+                {STYLE_PRESETS.map((style) => (
+                  <option key={style.id} value={style.id} className={isDayMode ? "bg-white text-slate-950" : "bg-zinc-900 text-white"}>
+                    {style.name}
+                  </option>
+                ))}
+              </optgroup>
+              {userPresets.length > 0 && (
+                <optgroup label="My Imported Songs">
+                  {userPresets.map((style) => (
+                    <option key={style.id} value={style.id} className={isDayMode ? "bg-white text-slate-950" : "bg-zinc-900 text-white"}>
+                      {style.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
           <button

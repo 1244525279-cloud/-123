@@ -1,0 +1,19 @@
+{
+  "id": "breaks",
+  "name": "Break Lab",
+  "slotIds": ["b2", "e5", "s5", "m4", "t2", "e1", "x1"],
+  "accent": "#f97316",
+  "glow": "rgba(249, 115, 22, 0.28)",
+  "panel": "rgba(234, 88, 12, 0.08)",
+  "energy": [1, 0.42, 0.68, 0.54, 0.88, 0.5, 0.76, 0.44, 0.94, 0.38, 0.82, 0.52, 0.9, 0.44, 0.72, 0.58],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 94, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 40, "flanger": 0},
+    {"lpf": 100, "hpf": 10, "volume": 54, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 24, "compressor": 0, "flanger": 0},
+    {"lpf": 58, "hpf": 0, "volume": 84, "sidechain": 24, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 36, "flanger": 0},
+    {"lpf": 74, "hpf": 0, "volume": 56, "sidechain": 0, "reverb": 0, "delay": 10, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 66, "hpf": 0, "volume": 50, "sidechain": 0, "reverb": 18, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 38, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 36, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 20, "volume": 32, "sidechain": 0, "reverb": 0, "delay": 20, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 24}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 88, "sidechain": 0, "reverb": 6, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 24, "flanger": 0}
+}

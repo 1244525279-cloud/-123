@@ -1,0 +1,19 @@
+{
+  "id": "cinematic",
+  "name": "Cinematic",
+  "slotIds": ["b9", "e8", "s8", "t9", "m9", "t5", "x7"],
+  "accent": "#facc15",
+  "glow": "rgba(250, 204, 21, 0.22)",
+  "panel": "rgba(202, 138, 4, 0.08)",
+  "energy": [0.7, 0.24, 0.38, 0.28, 0.62, 0.24, 0.42, 0.32, 0.82, 0.26, 0.5, 0.34, 0.72, 0.24, 0.44, 0.4],
+  "fxSlots": [
+    {"lpf": 62, "hpf": 0, "volume": 64, "sidechain": 0, "reverb": 20, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 12, "flanger": 0},
+    {"lpf": 100, "hpf": 22, "volume": 24, "sidechain": 0, "reverb": 30, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 42, "hpf": 0, "volume": 60, "sidechain": 0, "reverb": 24, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 48, "hpf": 0, "volume": 58, "sidechain": 0, "reverb": 68, "delay": 18, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 70, "hpf": 18, "volume": 36, "sidechain": 0, "reverb": 48, "delay": 44, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 60, "hpf": 0, "volume": 38, "sidechain": 0, "reverb": 54, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 20, "sidechain": 0, "reverb": 40, "delay": 30, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 78, "sidechain": 0, "reverb": 26, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 10, "flanger": 0}
+}

@@ -1,0 +1,8 @@
+{
+  "id": "alarm",
+  "name": "Warning",
+  "key": "7",
+  "label": "Alert pulse",
+  "color": "bg-amber-500",
+  "duration": 3.2
+}

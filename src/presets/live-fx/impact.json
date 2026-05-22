@@ -1,0 +1,8 @@
+{
+  "id": "impact",
+  "name": "Impact",
+  "key": "4",
+  "label": "Scene hit",
+  "color": "bg-orange-500",
+  "duration": 2.4
+}

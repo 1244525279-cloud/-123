@@ -1,0 +1,8 @@
+{
+  "id": "stutter",
+  "name": "Stutter",
+  "key": "5",
+  "label": "Glitch cue",
+  "color": "bg-fuchsia-500",
+  "duration": 2.1
+}

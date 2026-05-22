@@ -1,0 +1,19 @@
+{
+  "id": "warehouse",
+  "name": "Warehouse",
+  "slotIds": ["b3", "e3", "s4", "m2", "t4", "e4", "x2"],
+  "accent": "#60a5fa",
+  "glow": "rgba(96, 165, 250, 0.3)",
+  "panel": "rgba(37, 99, 235, 0.09)",
+  "energy": [1, 0.52, 0.82, 0.55, 1, 0.5, 0.85, 0.58, 1, 0.5, 0.82, 0.54, 1, 0.5, 0.9, 0.62],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 96, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 48, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 42, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 10, "compressor": 0, "flanger": 0},
+    {"lpf": 50, "hpf": 0, "volume": 92, "sidechain": 42, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 58, "flanger": 0},
+    {"lpf": 68, "hpf": 0, "volume": 52, "sidechain": 0, "reverb": 0, "delay": 18, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 70, "hpf": 8, "volume": 46, "sidechain": 0, "reverb": 20, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 14, "volume": 38, "sidechain": 0, "reverb": 12, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 22, "volume": 24, "sidechain": 0, "reverb": 0, "delay": 24, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 34}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 90, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 30, "flanger": 0}
+}
