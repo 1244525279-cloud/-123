@@ -1,0 +1,19 @@
+{
+  "id": "indie",
+  "name": "Indie Band",
+  "slotIds": ["b6", "e6", "s8", "m8", "t7", "m6", "x7"],
+  "accent": "#a3e635",
+  "glow": "rgba(163, 230, 53, 0.24)",
+  "panel": "rgba(101, 163, 13, 0.08)",
+  "energy": [0.92, 0.4, 0.66, 0.5, 0.86, 0.36, 0.72, 0.48, 0.94, 0.38, 0.7, 0.46, 0.84, 0.4, 0.68, 0.52],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 88, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 34, "flanger": 0},
+    {"lpf": 100, "hpf": 14, "volume": 46, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 18, "compressor": 0, "flanger": 0},
+    {"lpf": 58, "hpf": 0, "volume": 78, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 22, "flanger": 0},
+    {"lpf": 76, "hpf": 10, "volume": 56, "sidechain": 0, "reverb": 14, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 74, "hpf": 0, "volume": 52, "sidechain": 0, "reverb": 18, "delay": 10, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 82, "hpf": 0, "volume": 44, "sidechain": 0, "reverb": 0, "delay": 16, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 22, "volume": 16, "sidechain": 0, "reverb": 28, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 86, "sidechain": 0, "reverb": 6, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 18, "flanger": 0}
+}

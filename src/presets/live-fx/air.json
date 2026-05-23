@@ -1,0 +1,8 @@
+{
+  "id": "air",
+  "name": "Air Wash",
+  "key": "6",
+  "label": "Soft sweep",
+  "color": "bg-sky-500",
+  "duration": 4.5
+}

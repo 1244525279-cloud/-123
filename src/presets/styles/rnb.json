@@ -1,0 +1,19 @@
+{
+  "id": "rnb",
+  "name": "R&B Studio",
+  "slotIds": ["b7", "e7", "s7", "m6", "t8", "m9", "x6"],
+  "accent": "#c084fc",
+  "glow": "rgba(192, 132, 252, 0.24)",
+  "panel": "rgba(126, 34, 206, 0.08)",
+  "energy": [0.78, 0.34, 0.52, 0.44, 0.74, 0.36, 0.58, 0.5, 0.82, 0.32, 0.54, 0.42, 0.72, 0.34, 0.6, 0.48],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 76, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 18, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 34, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 34, "compressor": 0, "flanger": 0},
+    {"lpf": 50, "hpf": 0, "volume": 76, "sidechain": 12, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 28, "flanger": 0},
+    {"lpf": 66, "hpf": 0, "volume": 50, "sidechain": 0, "reverb": 32, "delay": 16, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 72, "hpf": 0, "volume": 48, "sidechain": 0, "reverb": 24, "delay": 22, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 20, "volume": 34, "sidechain": 0, "reverb": 0, "delay": 40, "pitch": 0, "panSwing": 38, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 24, "volume": 12, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 12}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 82, "sidechain": 0, "reverb": 12, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 14, "flanger": 0}
+}

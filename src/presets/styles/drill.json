@@ -1,0 +1,19 @@
+{
+  "id": "drill",
+  "name": "Drill Bells",
+  "slotIds": ["b13", "e13", "s10", "m13", "t13", "e12", "x5"],
+  "accent": "#818cf8",
+  "glow": "rgba(129, 140, 248, 0.24)",
+  "panel": "rgba(67, 56, 202, 0.08)",
+  "energy": [0.88, 0.42, 0.68, 0.48, 0.9, 0.42, 0.72, 0.52, 0.92, 0.44, 0.7, 0.5, 0.86, 0.42, 0.74, 0.56],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 84, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 30, "flanger": 0},
+    {"lpf": 100, "hpf": 20, "volume": 34, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 34, "compressor": 0, "flanger": 0},
+    {"lpf": 46, "hpf": 0, "volume": 86, "sidechain": 10, "reverb": 0, "delay": 0, "pitch": -2, "panSwing": 0, "compressor": 34, "flanger": 0},
+    {"lpf": 62, "hpf": 14, "volume": 48, "sidechain": 0, "reverb": 22, "delay": 30, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 70, "hpf": 8, "volume": 42, "sidechain": 0, "reverb": 0, "delay": 18, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 26, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 42, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 16, "volume": 16, "sidechain": 0, "reverb": 0, "delay": 24, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 18}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 82, "sidechain": 0, "reverb": 10, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 22, "flanger": 0}
+}

@@ -1,0 +1,19 @@
+{
+  "id": "neon",
+  "name": "Neon Loop",
+  "slotIds": ["b1", "e5", "s3", "t6", "t3", "m5", "x1"],
+  "accent": "#34d399",
+  "glow": "rgba(52, 211, 153, 0.32)",
+  "panel": "rgba(16, 185, 129, 0.08)",
+  "energy": [1, 0.36, 0.7, 0.42, 0.94, 0.38, 0.78, 0.44, 1, 0.34, 0.72, 0.4, 0.92, 0.36, 0.76, 0.48],
+  "fxSlots": [
+    {"lpf": 100, "hpf": 0, "volume": 92, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 32, "flanger": 0},
+    {"lpf": 100, "hpf": 8, "volume": 58, "sidechain": 0, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 18, "compressor": 0, "flanger": 0},
+    {"lpf": 62, "hpf": 0, "volume": 86, "sidechain": 30, "reverb": 0, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 46, "flanger": 0},
+    {"lpf": 55, "hpf": 0, "volume": 46, "sidechain": 22, "reverb": 36, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 72, "hpf": 0, "volume": 54, "sidechain": 0, "reverb": 24, "delay": 12, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 12, "volume": 48, "sidechain": 0, "reverb": 0, "delay": 34, "pitch": 0, "panSwing": 30, "compressor": 0, "flanger": 0},
+    {"lpf": 100, "hpf": 18, "volume": 28, "sidechain": 0, "reverb": 0, "delay": 16, "pitch": 0, "panSwing": 0, "compressor": 0, "flanger": 26}
+  ],
+  "masterFx": {"lpf": 100, "hpf": 0, "volume": 88, "sidechain": 0, "reverb": 8, "delay": 0, "pitch": 0, "panSwing": 0, "compressor": 18, "flanger": 0}
+}
