@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, RotateCcw, Shuffle, Keyboard, Circle, Wand2, Sun, Moon, Trash2, Radio, ListMusic, Scissors, Copy, MoveHorizontal, SkipBack, SkipForward, Pause, Disc3 } from 'lucide-react';
+import { Play, Square, UserCircle2, X, Mic, MicOff, Upload, Plus, RotateCcw, Shuffle, Keyboard, Circle, Wand2, Sun, Moon, Trash2, Radio, ListMusic, Scissors, Copy, MoveHorizontal, SkipBack, SkipForward, Pause, Disc3, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AUDIO_STYLES, AVAILABLE_SOUNDS, AudioStyleId, SoundDef, engineManager, FxParams, defaultFx, SlotChannel } from './audio';
 import { cn } from './lib/utils';
@@ -146,6 +146,37 @@ interface StylePreset {
 type ColorMode = 'night' | 'day';
 type AudioTransportState = 'stopped' | 'playing' | 'paused';
 type ArrangementFilePermissionMode = 'read' | 'readwrite';
+type GlobalHistoryScope = 'main' | 'dj';
+
+interface MainUndoSnapshot {
+  tabs: TabData[];
+  selectedStyleId: string;
+  activeTabId: string;
+  viewMode: ViewMode;
+  bpm: number;
+  recordedSounds: SoundDef[];
+  timelineClips: TimelineClip[];
+  selectedTimelineClipId: string | null;
+  timelinePlayhead: number;
+  timelineDuration: number;
+  timelineLoopRange: { start: number; end: number };
+  keyboardInstrumentMode: string;
+  isKeyboardSustainEnabled: boolean;
+  isKeyboardVisible: boolean;
+  liveFxControls: LiveFxControls;
+  isExtraLibraryOpen: boolean;
+  openExtraCategories: Record<string, boolean>;
+}
+
+interface GlobalHistoryEntry {
+  scope: GlobalHistoryScope;
+  data: unknown;
+}
+
+interface GlobalUndoAdapter {
+  getSnapshot: () => unknown;
+  restoreSnapshot: (snapshot: unknown) => void | Promise<void>;
+}
 
 interface ArrangementFileWritable {
   write: (data: Blob | BufferSource | string) => Promise<void>;
@@ -696,6 +727,11 @@ const DEFAULT_TIMELINE_SECONDS = 32;
 const PIXELS_PER_SECOND = 84;
 const TIMELINE_SNAP = 0.25;
 const TRACK_ROW_HEIGHT = 104;
+const GLOBAL_HISTORY_LIMIT = 20;
+const EXPORT_TARGET_BYTES = 10 * 1024 * 1024;
+const EXPORT_AUDIO_BUDGET_BYTES = Math.floor(EXPORT_TARGET_BYTES * 0.68);
+const EXPORT_MAX_AUDIO_SAMPLE_RATE = 16000;
+const EXPORT_MIN_AUDIO_SAMPLE_RATE = 4000;
 
 const getInternalRecordingMimeType = () => {
   const candidates = [
@@ -1050,7 +1086,13 @@ const decodePersistedAudioBuffer = async (ctx: AudioContext, data: PersistedAudi
   return ctx.decodeAudioData(arrayBuffer);
 };
 
-function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
+interface DJAudioEditorPageProps {
+  onBack: () => void;
+  onRecordGlobalHistory: (scope: GlobalHistoryScope) => void;
+  onRegisterGlobalUndoAdapter: (adapter: GlobalUndoAdapter | null) => void;
+}
+
+function DJAudioEditorPage({ onBack, onRecordGlobalHistory, onRegisterGlobalUndoAdapter }: DJAudioEditorPageProps) {
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [djTracks, setDjTracks] = useState<PersistedDJTrack[]>([]);
   const [activeTrackId, setActiveTrackId] = useState<string | null>(null);
@@ -1077,6 +1119,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   const positionRef = useRef(0);
   const isPlayingRef = useRef(false);
   const reverseRef = useRef(false);
+  const djBpmRef = useRef(120);
   const speedRef = useRef(1);
   const fxRef = useRef(djFx);
   const effectiveRateRef = useRef(1);
@@ -1179,11 +1222,23 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     })),
     activeTrackId: activeTrackIdRef.current,
     position: positionRef.current,
-    isReverse,
-    bpm: djBpm,
-    playbackSpeed,
-    fx: djFx,
+    isReverse: reverseRef.current,
+    bpm: djBpmRef.current,
+    playbackSpeed: speedRef.current,
+    fx: fxRef.current,
   });
+
+  const createDjUndoSnapshot = () => createDjPersistenceData(true);
+
+  const restoreDjUndoSnapshot = async (snapshot: unknown) => {
+    await applyDjPersistedState({
+      version: PERSISTENCE_STATE_VERSION,
+      updatedAt: Date.now(),
+      data: snapshot as PersistedDJState,
+    });
+  };
+
+  const recordDjHistory = () => onRecordGlobalHistory('dj');
 
   const persistDjState = async (includeAudio = true) => {
     if (!hasHydratedPersistenceRef.current || isApplyingPersistenceRef.current) return;
@@ -1258,9 +1313,10 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
       syncPosition(nextPosition);
       reverseRef.current = data.isReverse;
       setIsReverse(data.isReverse);
+      djBpmRef.current = data.bpm || 120;
+      setDjBpm(data.bpm || 120);
       speedRef.current = data.playbackSpeed || 1;
       setPlaybackSpeed(data.playbackSpeed || 1);
-      setDjBpm(data.bpm || 120);
       const nextFx = { ...defaultFx(), ...data.fx };
       fxRef.current = nextFx;
       setDjFx(nextFx);
@@ -1275,6 +1331,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const resetDjEditorState = async (emit = true) => {
+    if (emit) recordDjHistory();
     pauseDjPlayback();
     audioBufferRef.current = null;
     djTracksRef.current = [];
@@ -1287,9 +1344,10 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     syncPosition(0);
     reverseRef.current = false;
     setIsReverse(false);
+    djBpmRef.current = 120;
+    setDjBpm(120);
     speedRef.current = 1;
     setPlaybackSpeed(1);
-    setDjBpm(120);
     const nextFx = makeFx({ volume: 92, compressor: 12 });
     fxRef.current = nextFx;
     setDjFx(nextFx);
@@ -1383,6 +1441,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     const tracks = djTracksRef.current;
     const removeIndex = tracks.findIndex((track) => track.id === trackId);
     if (removeIndex === -1) return;
+    recordDjHistory();
     const nextTracks = tracks.filter((track) => track.id !== trackId);
     djTracksRef.current = nextTracks;
     setDjTracks(nextTracks);
@@ -1407,17 +1466,17 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
 
   const reorderDjTrack = (draggedId: string, targetId: string, placement: 'before' | 'after' = 'before') => {
     if (draggedId === targetId) return;
-    setDjTracks((current) => {
-      const fromIndex = current.findIndex((track) => track.id === draggedId);
-      const toIndex = current.findIndex((track) => track.id === targetId);
-      if (fromIndex === -1 || toIndex === -1) return current;
-      const next = [...current];
-      const [dragged] = next.splice(fromIndex, 1);
-      const targetIndex = next.findIndex((track) => track.id === targetId);
-      next.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, dragged);
-      djTracksRef.current = next;
-      return next;
-    });
+    const current = djTracksRef.current;
+    const fromIndex = current.findIndex((track) => track.id === draggedId);
+    const toIndex = current.findIndex((track) => track.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    recordDjHistory();
+    const next = [...current];
+    const [dragged] = next.splice(fromIndex, 1);
+    const targetIndex = next.findIndex((track) => track.id === targetId);
+    next.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, dragged);
+    djTracksRef.current = next;
+    setDjTracks(next);
   };
 
   const tickPlayback = () => {
@@ -1524,6 +1583,10 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
         }
       }
 
+      if (nextTracks.length > 0) {
+        recordDjHistory();
+      }
+
       setDjTracks((current) => {
         const merged = [...current, ...nextTracks];
         djTracksRef.current = merged;
@@ -1551,6 +1614,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleSpeedChange = (next: number) => {
+    if (Math.abs(next - speedRef.current) >= 0.001) recordDjHistory();
     anchorLivePlayback();
     speedRef.current = next;
     setPlaybackSpeed(next);
@@ -1558,6 +1622,8 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleBpmChange = (next: number) => {
+    if (next !== djBpmRef.current) recordDjHistory();
+    djBpmRef.current = next;
     setDjBpm(next);
     const channel = channelRef.current;
     const ctx = ctxRef.current;
@@ -1567,6 +1633,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleFxChange = (key: keyof FxParams, value: number) => {
+    if (fxRef.current[key] !== value) recordDjHistory();
     if (key === 'pitch') anchorLivePlayback();
     const next = { ...fxRef.current, [key]: value };
     fxRef.current = next;
@@ -1576,6 +1643,7 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const toggleReversePlayback = () => {
+    recordDjHistory();
     const wasPlaying = isPlayingRef.current;
     const live = getLivePosition();
     stopCurrentSource();
@@ -1696,9 +1764,21 @@ function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   }, [isReverse]);
 
   useEffect(() => {
+    djBpmRef.current = djBpm;
+  }, [djBpm]);
+
+  useEffect(() => {
     speedRef.current = playbackSpeed;
     updateSourceRate();
   }, [playbackSpeed]);
+
+  useEffect(() => {
+    onRegisterGlobalUndoAdapter({
+      getSnapshot: createDjUndoSnapshot,
+      restoreSnapshot: restoreDjUndoSnapshot,
+    });
+    return () => onRegisterGlobalUndoAdapter(null);
+  }, [onRegisterGlobalUndoAdapter, djTracks, activeTrackId, djPosition, isReverse, djBpm, playbackSpeed, djFx]);
 
   useEffect(() => {
     fxRef.current = djFx;
@@ -2113,6 +2193,7 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState('tab-1');
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
   const activeStyle = STYLE_PRESETS.find((style) => style.id === selectedStyleId) ?? STYLE_PRESETS[0];
+  const hasAnyTabPlaying = tabs.some(tab => tab.isPlaying) || pendingPlayIds.size > 0;
   const beatEnergy = activeTab.isPlaying ? activeStyle.energy[activeTab.activeStep] ?? 0.5 : 0;
   const downbeat = activeTab.activeStep % 4 === 0;
   const sweepPosition = `${(activeTab.activeStep / 15) * 100}%`;
@@ -2159,6 +2240,14 @@ export default function App() {
   const isApplyingMainPersistenceRef = useRef(false);
   const lastMainPersistenceUpdateRef = useRef(0);
   const mainQuotaWarningShownRef = useRef(false);
+  const globalUndoStackRef = useRef<GlobalHistoryEntry[]>([]);
+  const globalRedoStackRef = useRef<GlobalHistoryEntry[]>([]);
+  const isRestoringGlobalHistoryRef = useRef(false);
+  const djUndoAdapterRef = useRef<GlobalUndoAdapter | null>(null);
+  const [, setGlobalHistoryRevision] = useState(0);
+  const [arrangementFileHandle, setArrangementFileHandle] = useState<ArrangementFileHandle | null>(null);
+  const [arrangementFileName, setArrangementFileName] = useState<string | null>(null);
+  const [isSavingArrangement, setIsSavingArrangement] = useState(false);
 
   // Keyboard states
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -2413,6 +2502,170 @@ export default function App() {
     engine.setMasterFxParams(tab.masterFx);
   };
 
+  const cloneSoundForHistory = (sound: SoundDef): SoundDef => ({
+    ...sound,
+    pattern: sound.pattern.map((step) => ({ ...step })),
+  });
+
+  const cloneTabForHistory = (tab: TabData): TabData => ({
+    ...tab,
+    slots: tab.slots.map((slot) => slot ? cloneSoundForHistory(slot) : null),
+    mutedSlots: [...tab.mutedSlots],
+    fxSlots: tab.fxSlots.map((fx) => ({ ...fx })),
+    masterFx: { ...tab.masterFx },
+    isPlaying: false,
+    activeStep: 0,
+  });
+
+  const createMainUndoSnapshot = (): MainUndoSnapshot => ({
+    tabs: tabs.map(cloneTabForHistory),
+    selectedStyleId,
+    activeTabId,
+    viewMode,
+    bpm,
+    recordedSounds: recordedSounds.map(cloneSoundForHistory),
+    timelineClips: timelineClips.map((clip) => ({ ...clip })),
+    selectedTimelineClipId,
+    timelinePlayhead: timelinePlayheadRef.current,
+    timelineDuration,
+    timelineLoopRange: { ...timelineLoopRange },
+    keyboardInstrumentMode,
+    isKeyboardSustainEnabled,
+    isKeyboardVisible,
+    liveFxControls: { ...liveFxControls },
+    isExtraLibraryOpen,
+    openExtraCategories: { ...openExtraCategories },
+  });
+
+  const clearTimelineAudioForRestore = () => {
+    timelineSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch {
+        // Ignore already-ended sources.
+      }
+    });
+    timelineSourcesRef.current = [];
+    if (timelineAnimationRef.current !== null) {
+      cancelAnimationFrame(timelineAnimationRef.current);
+      timelineAnimationRef.current = null;
+    }
+  };
+
+  const restoreMainUndoSnapshot = (snapshot: MainUndoSnapshot) => {
+    engineManager.stopAllProjects();
+    clearTimelineAudioForRestore();
+    setPendingPlayIds(new Set());
+    setIsTimelinePlaying(false);
+    setTabs(snapshot.tabs.map(cloneTabForHistory));
+    setSelectedStyleId(snapshot.selectedStyleId);
+    setActiveTabId(snapshot.tabs.some(tab => tab.id === snapshot.activeTabId) ? snapshot.activeTabId : snapshot.tabs[0]?.id ?? 'tab-1');
+    setViewMode(snapshot.viewMode);
+    engineManager.bpm = snapshot.bpm;
+    setBpm(snapshot.bpm);
+    setRecordedSounds(snapshot.recordedSounds.map(cloneSoundForHistory));
+    setTimelineClips(snapshot.timelineClips.map((clip) => ({ ...clip })));
+    setSelectedTimelineClipId(snapshot.selectedTimelineClipId);
+    setTimelinePlayhead(snapshot.timelinePlayhead);
+    timelinePlayheadRef.current = snapshot.timelinePlayhead;
+    timelineOffsetRef.current = snapshot.timelinePlayhead;
+    setTimelineDuration(snapshot.timelineDuration);
+    setTimelineLoopRange({ ...snapshot.timelineLoopRange });
+    setKeyboardInstrumentMode(snapshot.keyboardInstrumentMode);
+    setIsKeyboardSustainEnabled(snapshot.isKeyboardSustainEnabled);
+    setIsKeyboardVisible(snapshot.isKeyboardVisible);
+    setLiveFxControls({ ...snapshot.liveFxControls });
+    setIsExtraLibraryOpen(snapshot.isExtraLibraryOpen);
+    setOpenExtraCategories({ ...snapshot.openExtraCategories });
+    setTimelineDeleteHistory([]);
+    snapshot.tabs.forEach(syncProjectEngine);
+  };
+
+  const registerGlobalUndoAdapter = (adapter: GlobalUndoAdapter | null) => {
+    djUndoAdapterRef.current = adapter;
+  };
+
+  const getCurrentGlobalHistorySnapshot = (scope: GlobalHistoryScope): unknown => {
+    if (scope === 'main') return createMainUndoSnapshot();
+    return djUndoAdapterRef.current?.getSnapshot();
+  };
+
+  const restoreGlobalHistorySnapshot = async (entry: GlobalHistoryEntry) => {
+    if (entry.scope === 'main') {
+      restoreMainUndoSnapshot(entry.data as MainUndoSnapshot);
+      return;
+    }
+    await djUndoAdapterRef.current?.restoreSnapshot(entry.data);
+  };
+
+  const recordGlobalHistory = (scope: GlobalHistoryScope = 'main') => {
+    if (isRestoringGlobalHistoryRef.current) return;
+    const snapshot = getCurrentGlobalHistorySnapshot(scope);
+    if (!snapshot) return;
+    globalUndoStackRef.current = [
+      ...globalUndoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope, data: snapshot },
+    ];
+    globalRedoStackRef.current = [];
+    setGlobalHistoryRevision((revision) => revision + 1);
+  };
+
+  const undoGlobalHistory = async () => {
+    const entry = globalUndoStackRef.current[globalUndoStackRef.current.length - 1];
+    if (!entry) return;
+    const currentSnapshot = getCurrentGlobalHistorySnapshot(entry.scope);
+    if (!currentSnapshot) return;
+    globalUndoStackRef.current = globalUndoStackRef.current.slice(0, -1);
+    globalRedoStackRef.current = [
+      ...globalRedoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope: entry.scope, data: currentSnapshot },
+    ];
+    isRestoringGlobalHistoryRef.current = true;
+    try {
+      await restoreGlobalHistorySnapshot(entry);
+    } finally {
+      isRestoringGlobalHistoryRef.current = false;
+      setGlobalHistoryRevision((revision) => revision + 1);
+    }
+  };
+
+  const redoGlobalHistory = async () => {
+    const entry = globalRedoStackRef.current[globalRedoStackRef.current.length - 1];
+    if (!entry) return;
+    const currentSnapshot = getCurrentGlobalHistorySnapshot(entry.scope);
+    if (!currentSnapshot) return;
+    globalRedoStackRef.current = globalRedoStackRef.current.slice(0, -1);
+    globalUndoStackRef.current = [
+      ...globalUndoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope: entry.scope, data: currentSnapshot },
+    ];
+    isRestoringGlobalHistoryRef.current = true;
+    try {
+      await restoreGlobalHistorySnapshot(entry);
+    } finally {
+      isRestoringGlobalHistoryRef.current = false;
+      setGlobalHistoryRevision((revision) => revision + 1);
+    }
+  };
+
+  useEffect(() => {
+    const handleGlobalHistoryKeydown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const isHistoryShortcut = (event.ctrlKey || event.metaKey) && key === 'z';
+      if (!isHistoryShortcut || event.altKey || event.repeat) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey) {
+        void redoGlobalHistory();
+      } else {
+        void undoGlobalHistory();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalHistoryKeydown, true);
+    return () => window.removeEventListener('keydown', handleGlobalHistoryKeydown, true);
+  }, [undoGlobalHistory, redoGlobalHistory]);
+
   const navigateAppRoute = (route: AppRoute) => {
     const nextPath = route === 'dj' ? DJ_AUDIO_ROUTE : '/';
     if (window.location.pathname !== nextPath) {
@@ -2423,6 +2676,8 @@ export default function App() {
 
   const applyBpmPreset = (nextBpm: number) => {
     const normalizedBpm = BPM_PRESETS.includes(nextBpm) ? nextBpm : 120;
+    if (normalizedBpm === bpm) return;
+    recordGlobalHistory();
     engineManager.bpm = normalizedBpm;
     setBpm(normalizedBpm);
   };
@@ -2430,6 +2685,7 @@ export default function App() {
   const applyStylePreset = (styleId: string, tabId = activeTabId) => {
     const preset = STYLE_PRESETS.find((style) => style.id === styleId) ?? STYLE_PRESETS[0];
     const targetTab = tabs.find(tab => tab.id === tabId) ?? activeTab;
+    recordGlobalHistory();
     const styledTab = createStyleTab(preset, targetTab.id, targetTab.styleId);
     const nextTab = {
       ...styledTab,
@@ -2443,6 +2699,7 @@ export default function App() {
   };
 
   const shuffleActiveTab = () => {
+    recordGlobalHistory();
     const pick = (category: string) => {
       const pool = AVAILABLE_SOUNDS.filter(sound => sound.category === category);
       return pool[Math.floor(Math.random() * pool.length)] ?? null;
@@ -2483,6 +2740,7 @@ export default function App() {
   };
 
   const reverseActiveTab = () => {
+    recordGlobalHistory();
     const reversedSlots = activeTab.slots.map(slot => {
       if (!slot) return null;
       return {
@@ -2499,6 +2757,7 @@ export default function App() {
   };
 
   const resetWorkbench = () => {
+    recordGlobalHistory();
     engineManager.stopAllProjects();
     setPendingPlayIds(new Set());
     const fresh = createCodexSongTab();
@@ -2524,6 +2783,7 @@ export default function App() {
   };
 
   const addNewTab = () => {
+    recordGlobalHistory();
     const newId = `tab-${Date.now()}`;
     const newTab: TabData = {
       ...createStyleTab(activeStyle, newId),
@@ -2536,6 +2796,7 @@ export default function App() {
 
   const deleteTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    recordGlobalHistory();
     engineManager.stopProject(id);
     setPendingPlayIds(prev => {
       const next = new Set(prev);
@@ -2588,6 +2849,40 @@ export default function App() {
     }
   };
 
+  const toggleGlobalTabPlayback = () => {
+    if (hasAnyTabPlaying) {
+      tabs.forEach(tab => {
+        recordArrangementStop(tab.id);
+        engineManager.stopProject(tab.id);
+      });
+      setPendingPlayIds(new Set());
+      setTabs(prev => prev.map(tab => ({ ...tab, isPlaying: false })));
+      return;
+    }
+
+    const startedIds = new Set<string>();
+    const queuedIds = new Set<string>();
+
+    tabs.forEach(tab => {
+      const engine = engineManager.getProject(tab.id);
+      engine.setStyle(tab.styleId);
+      const startMode = engineManager.startProject(tab.id);
+      recordArrangementStart(tab);
+      if (startMode === 'started') {
+        startedIds.add(tab.id);
+      } else {
+        queuedIds.add(tab.id);
+      }
+    });
+
+    setPendingPlayIds(queuedIds);
+    setTabs(prev => prev.map(tab => (
+      startedIds.has(tab.id)
+        ? { ...tab, isPlaying: true, activeStep: 0 }
+        : tab
+    )));
+  };
+
   const handleModuleMouseEnter = (index: number) => {
     if (activeTab.slots[index]) {
       clearTimeout(fxTimeoutRef.current);
@@ -2614,6 +2909,7 @@ export default function App() {
 
   const handleFxChange = (key: keyof FxParams, value: number) => {
     if (hoveredFxSlot === null) return;
+    if (activeTab.fxSlots[hoveredFxSlot]?.[key] !== value) recordGlobalHistory();
     
     const newFx = [...activeTab.fxSlots];
     newFx[hoveredFxSlot] = { ...newFx[hoveredFxSlot], [key]: value };
@@ -2624,6 +2920,8 @@ export default function App() {
 
   const handleMasterFxChange = (key: keyof FxParams, value: number) => {
     if (!hoveredTabFxId) return;
+    const targetTab = tabs.find(t => t.id === hoveredTabFxId);
+    if (targetTab?.masterFx[key] !== value) recordGlobalHistory();
     
     setTabs(prev => prev.map(t => {
       if (t.id === hoveredTabFxId) {
@@ -2637,6 +2935,7 @@ export default function App() {
 
   const handleResetFx = () => {
     if (hoveredFxSlot === null) return;
+    recordGlobalHistory();
     const resetValues = defaultFx();
     const newFx = [...activeTab.fxSlots];
     newFx[hoveredFxSlot] = resetValues;
@@ -2647,6 +2946,7 @@ export default function App() {
 
   const handleResetMasterFx = () => {
     if (!hoveredTabFxId) return;
+    recordGlobalHistory();
     const resetValues = defaultFx();
     
     setTabs(prev => prev.map(t => {
@@ -2659,6 +2959,7 @@ export default function App() {
   };
 
   const handleStyleChange = (styleId: AudioStyleId) => {
+    if (activeTab.styleId !== styleId) recordGlobalHistory();
     setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, styleId } : t));
     engineManager.getProject(activeTab.id).setStyle(styleId);
   };
@@ -2935,6 +3236,7 @@ export default function App() {
             playMode: 'buffer',
           };
 
+          recordGlobalHistory();
           setRecordedSounds(prev => [...prev, newSound]);
           setTimelineClips(prev => [
             ...prev,
@@ -3042,6 +3344,17 @@ export default function App() {
     bufferBase64?: string;
     sampleRate?: number;
     numberOfChannels?: number;
+    audioAssetId?: string;
+  }
+
+  interface MusicArrAudioAsset {
+    id: string;
+    format: 'pcm8-mono';
+    sampleRate: number;
+    duration: number;
+    dataBase64: string;
+    sourceSampleRate?: number;
+    sourceChannels?: number;
   }
 
   interface SerializedTabData {
@@ -3058,10 +3371,19 @@ export default function App() {
   }
 
   interface MusicArrFile {
-    version: '1.0';
+    version: '1.0' | '1.1';
     bpm?: number;
     tabs: SerializedTabData[];
     recordedSounds: SerializableSoundDef[];
+    audioAssets?: MusicArrAudioAsset[];
+    exportCompression?: {
+      format: 'split-audio-assets';
+      targetBytes: number;
+      audioSampleRate: number;
+      audioBitDepth: number;
+      audioChannels: number;
+      assetCount: number;
+    };
     timeline?: {
       duration: number;
       playhead: number;
@@ -3170,6 +3492,74 @@ export default function App() {
     return await engineManager.ctx.decodeAudioData(buffer);
   };
 
+  const uint8ToBase64 = (bytes: Uint8Array) => {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
+  const base64ToUint8 = (base64: string) => {
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  };
+
+  const computeExportAudioSampleRate = (buffers: AudioBuffer[]) => {
+    const totalDuration = buffers.reduce((sum, buffer) => sum + buffer.duration, 0);
+    if (totalDuration <= 0) return EXPORT_MAX_AUDIO_SAMPLE_RATE;
+    const budgetedRate = Math.floor(EXPORT_AUDIO_BUDGET_BYTES / Math.max(1, totalDuration));
+    return Math.max(EXPORT_MIN_AUDIO_SAMPLE_RATE, Math.min(EXPORT_MAX_AUDIO_SAMPLE_RATE, budgetedRate));
+  };
+
+  const encodeCompressedAudioAsset = (
+    id: string,
+    buffer: AudioBuffer,
+    targetSampleRate: number,
+  ): MusicArrAudioAsset => {
+    const sampleRate = Math.max(EXPORT_MIN_AUDIO_SAMPLE_RATE, Math.min(EXPORT_MAX_AUDIO_SAMPLE_RATE, Math.round(targetSampleRate)));
+    const frameCount = Math.max(1, Math.ceil(buffer.duration * sampleRate));
+    const bytes = new Uint8Array(frameCount);
+    const channelData = Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel));
+    const ratio = buffer.sampleRate / sampleRate;
+
+    for (let i = 0; i < frameCount; i++) {
+      const sourceIndex = Math.min(buffer.length - 1, Math.floor(i * ratio));
+      const mixedSample = channelData.reduce((sum, channel) => sum + channel[sourceIndex], 0) / Math.max(1, channelData.length);
+      const clamped = Math.max(-1, Math.min(1, mixedSample));
+      bytes[i] = Math.max(0, Math.min(255, Math.round((clamped + 1) * 127.5)));
+    }
+
+    return {
+      id,
+      format: 'pcm8-mono',
+      sampleRate,
+      duration: buffer.duration,
+      dataBase64: uint8ToBase64(bytes),
+      sourceSampleRate: buffer.sampleRate,
+      sourceChannels: buffer.numberOfChannels,
+    };
+  };
+
+  const decodeCompressedAudioAsset = async (asset: MusicArrAudioAsset): Promise<AudioBuffer> => {
+    engineManager.init();
+    if (!engineManager.ctx) throw new Error('Unable to initialize audio context for import');
+
+    const bytes = base64ToUint8(asset.dataBase64);
+    const sampleRate = Math.max(EXPORT_MIN_AUDIO_SAMPLE_RATE, Math.min(EXPORT_MAX_AUDIO_SAMPLE_RATE, Number(asset.sampleRate) || EXPORT_MAX_AUDIO_SAMPLE_RATE));
+    const buffer = engineManager.ctx.createBuffer(1, Math.max(1, bytes.length), sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bytes.length; i++) {
+      data[i] = (bytes[i] / 127.5) - 1;
+    }
+    return buffer;
+  };
+
 	  const serializeSoundDef = async (sound: SoundDef): Promise<SerializableSoundDef> => {
     const serialized: SerializableSoundDef = {
       id: sound.id,
@@ -3196,8 +3586,41 @@ export default function App() {
 	    return rest;
 	  };
 
-  const deserializeSoundDef = async (raw: SerializableSoundDef): Promise<SoundDef> => {
-    const builtIn = AVAILABLE_SOUNDS.find((item) => item.id === raw.id && !raw.bufferBase64);
+  const collectExportAudioSources = (sounds: Array<SoundDef | null>) => {
+    const sources = new Map<string, AudioBuffer>();
+    sounds.forEach((sound) => {
+      if (!sound?.buffer) return;
+      sources.set(sound.id, sound.buffer);
+    });
+    return sources;
+  };
+
+  const serializeSoundDefForExport = (sound: SoundDef, audioAssetIds: Set<string>): SerializableSoundDef => {
+    const serialized: SerializableSoundDef = {
+      id: sound.id,
+      name: sound.name,
+      category: sound.category,
+      color: sound.color,
+      pattern: sound.pattern,
+      loopMode: sound.loopMode,
+      playMode: sound.playMode,
+    };
+
+    if (sound.buffer && audioAssetIds.has(sound.id)) {
+      serialized.audioAssetId = sound.id;
+      serialized.sampleRate = sound.buffer.sampleRate;
+      serialized.numberOfChannels = sound.buffer.numberOfChannels;
+    }
+
+    return serialized;
+  };
+
+  const deserializeSoundDef = async (
+    raw: SerializableSoundDef,
+    audioAssets?: Map<string, MusicArrAudioAsset>,
+    audioAssetCache?: Map<string, Promise<AudioBuffer>>,
+  ): Promise<SoundDef> => {
+    const builtIn = AVAILABLE_SOUNDS.find((item) => item.id === raw.id && !raw.bufferBase64 && !raw.audioAssetId);
     if (builtIn) {
       return builtIn;
     }
@@ -3214,16 +3637,34 @@ export default function App() {
 
     if (raw.bufferBase64) {
       result.buffer = await decodeBase64ToAudioBuffer(raw.bufferBase64);
+    } else if (raw.audioAssetId) {
+      const asset = audioAssets?.get(raw.audioAssetId);
+      if (asset) {
+        const cached = audioAssetCache?.get(asset.id);
+        const bufferPromise = cached ?? decodeCompressedAudioAsset(asset);
+        if (!cached) audioAssetCache?.set(asset.id, bufferPromise);
+        result.buffer = await bufferPromise;
+      }
     }
 
     return result;
   };
 
 	  const createMusicarrPayload = async (): Promise<MusicArrFile> => {
+    const audioSources = collectExportAudioSources([
+      ...recordedSounds,
+      ...tabs.flatMap(tab => tab.slots),
+    ]);
+    const exportSampleRate = computeExportAudioSampleRate([...audioSources.values()]);
+    const audioAssets = [...audioSources.entries()].map(([id, buffer]) => (
+      encodeCompressedAudioAsset(id, buffer, exportSampleRate)
+    ));
+    const audioAssetIds = new Set(audioAssets.map(asset => asset.id));
+
     const tabsPayload = await Promise.all(tabs.map(async (tab) => ({
       id: tab.id,
       name: tab.name,
-      slots: await Promise.all(tab.slots.map((slot) => slot ? serializeSoundDef(slot) : null)),
+      slots: tab.slots.map((slot) => slot ? serializeSoundDefForExport(slot, audioAssetIds) : null),
       mutedSlots: tab.mutedSlots,
       moduleFx: tab.fxSlots,
       masterFx: tab.masterFx,
@@ -3232,13 +3673,22 @@ export default function App() {
       isPlaying: tab.isPlaying,
     })));
 
-    const recordedPayload = await Promise.all(recordedSounds.map(serializeSoundDef));
+    const recordedPayload = recordedSounds.map(sound => serializeSoundDefForExport(sound, audioAssetIds));
 
     return {
-      version: '1.0',
+      version: '1.1',
       bpm,
       tabs: tabsPayload,
       recordedSounds: recordedPayload,
+      audioAssets,
+      exportCompression: {
+        format: 'split-audio-assets',
+        targetBytes: EXPORT_TARGET_BYTES,
+        audioSampleRate: exportSampleRate,
+        audioBitDepth: 8,
+        audioChannels: 1,
+        assetCount: audioAssets.length,
+      },
       timeline: {
         duration: timelineDuration,
         playhead: timelinePlayheadRef.current,
@@ -3300,7 +3750,7 @@ export default function App() {
 	    isApplyingMainPersistenceRef.current = true;
 	    try {
 	      const data = snapshot.data;
-	      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeSoundDef));
+	      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(sound => deserializeSoundDef(sound)));
 	      const importedTabs = await Promise.all((data.tabs || []).map(async (tab) => ({
 	        id: tab.id,
 	        name: tab.name,
@@ -3416,7 +3866,7 @@ export default function App() {
 
 	  const createMusicarrText = async () => {
     const payload = await createMusicarrPayload();
-    return JSON.stringify(payload, null, 2);
+    return JSON.stringify(payload);
   };
 
   const createSuggestedExportFileName = () => {
@@ -3477,6 +3927,8 @@ export default function App() {
           ],
         });
         await writeArrangementFile(handle, text);
+        setArrangementFileHandle(handle);
+        setArrangementFileName(handle.name || suggestedName);
         return;
       }
 
@@ -3484,12 +3936,32 @@ export default function App() {
       if (!fallbackName) return;
       const fileName = sanitizeMusicarrFileName(fallbackName);
       downloadMusicarrFile(text, fileName);
+      setArrangementFileHandle(null);
+      setArrangementFileName(fileName);
     } catch (err) {
       if (isPickerAbort(err)) return;
       console.error('Export failed', err);
       alert('导出失败，请重试。');
     } finally {
       setIsExportingArrangement(false);
+    }
+  };
+
+  const handleSaveArrangementFile = async () => {
+    if (!arrangementFileHandle || isSavingArrangement || isExportingArrangement) return;
+    setIsSavingArrangement(true);
+
+    try {
+      const text = await createMusicarrText();
+      await writeArrangementFile(arrangementFileHandle, text);
+      setArrangementFileName(arrangementFileHandle.name || arrangementFileName);
+    } catch (err) {
+      if (isPickerAbort(err)) return;
+      console.error('Save failed', err);
+      alert('保存失败，请重新点击 Export 选择保存路径。');
+      setArrangementFileHandle(null);
+    } finally {
+      setIsSavingArrangement(false);
     }
   };
 
@@ -3510,13 +3982,17 @@ export default function App() {
         throw new Error('无效的文件格式');
       }
 
+      recordGlobalHistory();
       engineManager.init();
       engineManager.stopAllProjects();
       setPendingPlayIds(new Set());
-      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeSoundDef));
+      const audioAssets = new Map((data.audioAssets || []).map(asset => [asset.id, asset]));
+      const audioAssetCache = new Map<string, Promise<AudioBuffer>>();
+      const deserializeImportedSound = (sound: SerializableSoundDef) => deserializeSoundDef(sound, audioAssets, audioAssetCache);
+      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeImportedSound));
       const importedTabs = await Promise.all(data.tabs.map(async (tab) => ({
         ...tab,
-        slots: await Promise.all(tab.slots.map((slot) => slot ? deserializeSoundDef(slot) : null)),
+        slots: await Promise.all(tab.slots.map((slot) => slot ? deserializeImportedSound(slot) : null)),
         fxSlots: tab.moduleFx ?? tab.fxSlots ?? new Array(7).fill(null).map(defaultFx),
         isPlaying: false,
         activeStep: 0,
@@ -3578,6 +4054,7 @@ export default function App() {
 
   const toggleMute = (index: number) => {
     if (!activeTab.slots[index]) return;
+    recordGlobalHistory();
     const newMuted = [...activeTab.mutedSlots];
     newMuted[index] = !newMuted[index];
     
@@ -3601,6 +4078,7 @@ export default function App() {
       
       if (!item) return;
 
+      recordGlobalHistory();
       const newSlots = [...activeTab.slots];
       newSlots[slotIndex] = item;
       
@@ -3693,6 +4171,7 @@ export default function App() {
       const item = getSoundById(itemData.id);
       if (!item) return;
       const duration = Math.min(timelineDuration, 8, Math.max(1.5, item.buffer?.duration ?? 4));
+      recordGlobalHistory();
       setTimelineClips(prev => [
         ...prev,
         {
@@ -3718,6 +4197,7 @@ export default function App() {
   const duplicateTimelineClip = (clipId: string) => {
     const clip = timelineClips.find(item => item.id === clipId);
     if (!clip) return;
+    recordGlobalHistory();
     setTimelineClips(prev => [
       ...prev,
       {
@@ -3730,6 +4210,7 @@ export default function App() {
   };
 
   const cropTimelineClip = (clipId: string, edge: 'left' | 'right', amount: number) => {
+    recordGlobalHistory();
     setTimelineClips(prev => prev.map(clip => {
       if (clip.id !== clipId) return clip;
       if (edge === 'left') {
@@ -3749,6 +4230,7 @@ export default function App() {
     if (!selectedTimelineClipId) return;
     const clip = timelineClips.find(item => item.id === selectedTimelineClipId);
     if (!clip) return;
+    recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     setTimelineDeleteHistory(prev => [...prev.slice(-19), [clip]]);
     setTimelineClips(prev => prev.filter(item => item.id !== selectedTimelineClipId));
@@ -3771,6 +4253,7 @@ export default function App() {
     event.stopPropagation();
     event.preventDefault();
     setSelectedTimelineClipId(clip.id);
+    recordGlobalHistory();
     timelineEditRef.current = {
       clipId: clip.id,
       mode,
@@ -3787,6 +4270,9 @@ export default function App() {
   const beginTimelineTransportEdit = (event: React.PointerEvent, mode: TimelineTransportEdit['mode']) => {
     event.stopPropagation();
     event.preventDefault();
+    if (mode !== 'playhead') {
+      recordGlobalHistory();
+    }
     if (mode === 'playhead' && isTimelinePlaying) {
       stopTimelinePlayback(false);
     }
@@ -3914,8 +4400,10 @@ export default function App() {
   const handleTimelineDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = Number(event.target.value);
     if (!Number.isFinite(next)) return;
+    const normalized = Math.max(1, Math.min(600, next));
+    if (normalized !== timelineDuration) recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
-    setTimelineDuration(Math.max(1, Math.min(600, next)));
+    setTimelineDuration(normalized);
   };
 
   useEffect(() => {
@@ -4024,6 +4512,7 @@ export default function App() {
   }, [timelineClips, recordedSounds]);
 
   const deleteRecordedSound = (soundId: string) => {
+    recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     setRecordedSounds(prev => prev.filter(sound => sound.id !== soundId));
     setTimelineClips(prev => prev.filter(clip => clip.soundId !== soundId));
@@ -4035,6 +4524,7 @@ export default function App() {
 
   const clearRecordedSounds = () => {
     if (recordedSounds.length === 0) return;
+    recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     const soundIds = new Set(recordedSounds.map(sound => sound.id));
     setRecordedSounds([]);
@@ -4342,6 +4832,8 @@ export default function App() {
   );
 
   const handleClearSlot = (index: number) => {
+    if (!activeTab.slots[index]) return;
+    recordGlobalHistory();
     const newSlots = [...activeTab.slots];
     newSlots[index] = null;
     setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, slots: newSlots } : t));
@@ -4349,6 +4841,7 @@ export default function App() {
   };
 
   const handleClearActiveTab = () => {
+    recordGlobalHistory();
     const emptySlots = new Array(7).fill(null);
     const mutedSlots = new Array(7).fill(false);
     const fxSlots = new Array(7).fill(null).map(defaultFx);
@@ -4364,6 +4857,7 @@ export default function App() {
 
   const toggleLoopMode = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    recordGlobalHistory();
     setRecordedSounds(prev => prev.map(s => {
       if (s.id !== id) return s;
       const newMode = s.loopMode === 'fast' ? 'full' : 'fast';
@@ -4434,6 +4928,7 @@ export default function App() {
               loopMode: 'full',
               playMode: 'buffer'
             };
+            recordGlobalHistory();
             setRecordedSounds(prev => [...prev, newSound]);
             setViewMode('timeline');
           } catch (err) {
@@ -4478,6 +4973,7 @@ export default function App() {
           buffer: processedBuffer,
           loopMode: 'full'
         };
+        recordGlobalHistory();
         setRecordedSounds(prev => [...prev, newSound]);
       }
     } catch (err) {
@@ -4900,6 +5396,7 @@ export default function App() {
         playMode: 'buffer'
       };
 
+      recordGlobalHistory();
       setRecordedSounds(prev => [...prev, newSound]);
     }
   };
@@ -5095,6 +5592,25 @@ export default function App() {
         isDayMode ? "border-slate-900/10 bg-white/80" : "border-white/5 bg-black/40"
       )}>
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none pb-0">
+          <button
+            type="button"
+            onClick={toggleGlobalTabPlayback}
+            aria-label={hasAnyTabPlaying ? 'Pause all tabs' : 'Play all tabs'}
+            title={hasAnyTabPlaying ? 'Pause all tabs' : 'Play all tabs'}
+            className={cn(
+              "sticky left-0 z-20 flex h-[43px] min-w-[43px] items-center justify-center rounded-t-lg border border-b-0 transition-all shadow-sm",
+              hasAnyTabPlaying
+                ? "border-emerald-400/45 bg-emerald-500 text-white shadow-[0_0_18px_rgba(16,185,129,0.22)]"
+                : isDayMode
+                  ? "border-slate-900/10 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-950"
+                  : "border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+            )}
+          >
+            {hasAnyTabPlaying
+              ? <Square className="h-3.5 w-3.5" fill="currentColor" />
+              : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
+            }
+          </button>
           {tabs.map((tab) => {
             const isQueued = pendingPlayIds.has(tab.id);
             return (
@@ -5166,6 +5682,20 @@ export default function App() {
 	             )}
 	          >
 	             {isExportingArrangement ? 'Exporting' : 'Export'}
+	          </button>
+	          <button
+	             onClick={handleSaveArrangementFile}
+	             disabled={!arrangementFileHandle || isSavingArrangement || isExportingArrangement}
+	             title={arrangementFileHandle ? `Save to ${arrangementFileName || arrangementFileHandle.name}` : 'Export once before Save is available'}
+	             className={cn(
+	               "px-3 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all inline-flex items-center gap-1.5",
+	               !arrangementFileHandle || isSavingArrangement || isExportingArrangement
+	                 ? "bg-white/[0.03] text-zinc-700 cursor-not-allowed"
+	                 : "bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"
+	             )}
+	          >
+	             <Save size={11} strokeWidth={2.5} />
+	             {isSavingArrangement ? 'Saving' : 'Save'}
 	          </button>
 	          <button
 	             onClick={() => importFileInputRef.current?.click()}
@@ -5783,7 +6313,10 @@ export default function App() {
                     {KEYBOARD_INSTRUMENT_MODES.map((mode) => (
                       <button
                         key={mode.id}
-                        onClick={() => setKeyboardInstrumentMode(mode.id)}
+                        onClick={() => {
+                          if (keyboardInstrumentMode !== mode.id) recordGlobalHistory();
+                          setKeyboardInstrumentMode(mode.id);
+                        }}
                         className={cn(
                           "rounded-full px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] transition-all border",
                           keyboardInstrumentMode === mode.id
@@ -5809,7 +6342,10 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setIsKeyboardSustainEnabled(prev => !prev)}
+                      onClick={() => {
+                        recordGlobalHistory();
+                        setIsKeyboardSustainEnabled(prev => !prev);
+                      }}
                       aria-pressed={isKeyboardSustainEnabled}
                       className={cn(
                         "rounded-full border px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] transition-all",
@@ -5880,7 +6416,11 @@ export default function App() {
                         max="2"
                         step="0.05"
                         value={liveFxControls.speed}
-                        onChange={(e) => setLiveFxControls(prev => ({ ...prev, speed: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          if (value !== liveFxControls.speed) recordGlobalHistory();
+                          setLiveFxControls(prev => ({ ...prev, speed: value }));
+                        }}
                         className="w-full accent-emerald-400"
                       />
                     </label>
@@ -5895,7 +6435,11 @@ export default function App() {
                         max="1.5"
                         step="0.01"
                         value={liveFxControls.volume}
-                        onChange={(e) => setLiveFxControls(prev => ({ ...prev, volume: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          if (value !== liveFxControls.volume) recordGlobalHistory();
+                          setLiveFxControls(prev => ({ ...prev, volume: value }));
+                        }}
                         className="w-full accent-emerald-400"
                       />
                     </label>
@@ -5910,7 +6454,11 @@ export default function App() {
                         max="1.5"
                         step="0.01"
                         value={liveFxControls.fadeIn}
-                        onChange={(e) => setLiveFxControls(prev => ({ ...prev, fadeIn: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          if (value !== liveFxControls.fadeIn) recordGlobalHistory();
+                          setLiveFxControls(prev => ({ ...prev, fadeIn: value }));
+                        }}
                         className="w-full accent-emerald-400"
                       />
                     </label>
@@ -5925,7 +6473,11 @@ export default function App() {
                         max="2"
                         step="0.01"
                         value={liveFxControls.fadeOut}
-                        onChange={(e) => setLiveFxControls(prev => ({ ...prev, fadeOut: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          if (value !== liveFxControls.fadeOut) recordGlobalHistory();
+                          setLiveFxControls(prev => ({ ...prev, fadeOut: value }));
+                        }}
                         className="w-full accent-emerald-400"
                       />
                     </label>
@@ -5973,7 +6525,11 @@ export default function App() {
       </AnimatePresence>
     </div>
     <div className={appRoute === 'dj' ? 'fixed inset-0 z-[100] block' : 'hidden'}>
-      <DJAudioEditorPage onBack={() => navigateAppRoute('main')} />
+      <DJAudioEditorPage
+        onBack={() => navigateAppRoute('main')}
+        onRecordGlobalHistory={recordGlobalHistory}
+        onRegisterGlobalUndoAdapter={registerGlobalUndoAdapter}
+      />
     </div>
     </>
   );
