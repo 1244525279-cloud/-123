@@ -1,3 +1,5 @@
+import { FIREBASE_DATABASE_URL, SHOW_BACKEND_URL, SHOW_CONTROL_TOKEN, SHOW_ID, SHOW_TRANSPORT, SHOW_WS_URL } from './runtimeConfig';
+
 export type ModuleName = 'audio' | 'visual' | 'interaction';
 
 export type ControlCommand = {
@@ -14,7 +16,8 @@ export type ControlCommand = {
 
 type ServerMessage =
   | { type: 'state.snapshot'; state: unknown }
-  | { type: 'state.patch'; state: unknown }
+  | { type: 'state.patch'; module: ModuleName; patch: Record<string, unknown>; updatedAt?: number }
+  | { type: 'show.patch'; patch: Record<string, unknown>; updatedAt?: number }
   | ControlCommand
   | { type: 'control.ack'; ok: boolean; command: ControlCommand }
   | { type: 'error'; error: string }
@@ -53,28 +56,77 @@ type ShowControlClient = {
   close: () => void;
 };
 
-const env = (import.meta as any).env || {};
-const backendUrl = (env.VITE_SHOW_BACKEND_URL || 'http://localhost:4300').replace(/\/$/, '');
-const wsUrl = env.VITE_SHOW_WS_URL || backendUrl.replace(/^http/, 'ws') + '/ws';
-const controlToken = env.VITE_CONTROL_TOKEN || '';
-const databaseUrl = String(env.VITE_FIREBASE_DATABASE_URL || '').replace(/\/$/, '');
-const showId = env.VITE_SHOW_ID || 'show-main';
-const transport = env.VITE_SHOW_TRANSPORT || 'auto';
+const backendUrl = SHOW_BACKEND_URL.replace(/\/$/, '');
+const wsUrl = SHOW_WS_URL.replace(/\/$/, '');
+const controlToken = SHOW_CONTROL_TOKEN;
+const databaseUrl = FIREBASE_DATABASE_URL;
+const showId = SHOW_ID;
+const transport = SHOW_TRANSPORT;
 
 export function createShowControlClient(options: ClientOptions): ShowControlClient {
-  if (shouldUseFirebase()) return createFirebaseClient(options);
+  if (!controlToken.trim()) {
+    options.onStatus?.('offline');
+    options.onError?.('Control token is required before show control can connect');
+    return createDisabledClient();
+  }
+  if (shouldUseFirebase()) {
+    if ((transport === 'websocket' || transport === 'cloudflare') && databaseUrl) {
+      options.onError?.(`WebSocket URL ${wsUrl || '(empty)'} is not usable from this page; falling back to Firebase`);
+    }
+    return createFirebaseClient(options);
+  }
   return createWebSocketClient(options);
+}
+
+function createDisabledClient(): ShowControlClient {
+  return {
+    publishState() {
+      return;
+    },
+    publishAudioFrame() {
+      return;
+    },
+    async postState() {
+      throw new Error('Control token is required');
+    },
+    close() {
+      return;
+    },
+  };
 }
 
 function shouldUseFirebase() {
   if (transport === 'firebase') return Boolean(databaseUrl);
-  if (transport === 'websocket') return false;
-  return Boolean(databaseUrl) && backendUrl.includes('vercel.app');
+  if (transport === 'websocket' || transport === 'cloudflare') return !isUsableWebSocketUrl() && Boolean(databaseUrl);
+  if (isUsableWebSocketUrl()) return false;
+  return Boolean(databaseUrl);
+}
+
+function isUsableWebSocketUrl() {
+  if (!wsUrl) return false;
+  try {
+    const url = new URL(wsUrl);
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return false;
+    const pageProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+    const pageHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    const pageIsLocal = isLocalHost(pageHost);
+    if (pageProtocol === 'https:' && url.protocol !== 'wss:') return false;
+    if (isLocalHost(url.hostname) && !pageIsLocal) return false;
+    if (url.hostname.endsWith('vercel.app')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalHost(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
 }
 
 function createWebSocketClient(options: ClientOptions): ShowControlClient {
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
+  let heartbeatTimer: number | null = null;
   let closed = false;
   let lastPatch = '';
   let pendingPatch: Record<string, unknown> | null = null;
@@ -88,7 +140,7 @@ function createWebSocketClient(options: ClientOptions): ShowControlClient {
   const connect = () => {
     if (closed) return;
     options.onStatus?.('connecting');
-    socket = new WebSocket(controlToken ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(controlToken)}` : wsUrl);
+    socket = new WebSocket(withQuery(wsUrl, { room: showId, token: controlToken || undefined }));
 
     socket.addEventListener('open', () => {
       options.onStatus?.('connected');
@@ -102,6 +154,10 @@ function createWebSocketClient(options: ClientOptions): ShowControlClient {
       if (pendingPatch) {
         send({ type: 'module.statePatch', module: options.module, source: options.clientId, patch: pendingPatch });
       }
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      heartbeatTimer = window.setInterval(() => {
+        send({ type: 'heartbeat', clientId: options.clientId, sentAt: Date.now() });
+      }, 10_000);
     });
 
     socket.addEventListener('message', (event) => {
@@ -116,6 +172,8 @@ function createWebSocketClient(options: ClientOptions): ShowControlClient {
     socket.addEventListener('close', () => {
       if (closed) return;
       options.onStatus?.('offline');
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
       reconnectTimer = window.setTimeout(connect, 1200);
     });
 
@@ -140,7 +198,7 @@ function createWebSocketClient(options: ClientOptions): ShowControlClient {
     async postState(patch: Record<string, unknown>) {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (controlToken) headers['x-control-token'] = controlToken;
-      await fetch(`${backendUrl}/api/modules/${options.module}/state`, {
+      await fetch(withQuery(`${backendUrl}/api/modules/${options.module}/state`, { room: showId }), {
         method: 'POST',
         headers,
         body: JSON.stringify({ source: options.clientId, patch }),
@@ -149,6 +207,7 @@ function createWebSocketClient(options: ClientOptions): ShowControlClient {
     close() {
       closed = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
       socket?.close();
     },
   };
@@ -162,6 +221,7 @@ function createFirebaseClient(options: ClientOptions): ShowControlClient {
   let closed = false;
   let lastPatch = '';
   let pendingPatch: Record<string, unknown> | null = null;
+  let lastAudioFrameWriteAt = 0;
 
   const connect = async () => {
     if (closed) return;
@@ -234,8 +294,14 @@ function createFirebaseClient(options: ClientOptions): ShowControlClient {
         options.onError?.(error instanceof Error ? error.message : String(error));
       });
     },
-    publishAudioFrame(_frame: AudioFrameMessage) {
-      return;
+    publishAudioFrame(frame: AudioFrameMessage) {
+      const now = Date.now();
+      if (now - lastAudioFrameWriteAt < 120) return;
+      lastAudioFrameWriteAt = now;
+      void publishFirebaseAudioFrame(frame).catch((error) => {
+        options.onStatus?.('offline');
+        options.onError?.(error instanceof Error ? error.message : String(error));
+      });
     },
     async postState(patch: Record<string, unknown>) {
       pendingPatch = patch;
@@ -247,6 +313,32 @@ function createFirebaseClient(options: ClientOptions): ShowControlClient {
       void firebaseDelete(`${rootPath}/clients/${safePath(options.clientId)}`).catch(() => undefined);
     },
   };
+
+  async function publishFirebaseAudioFrame(frame: AudioFrameMessage) {
+    if (options.module !== 'audio') return;
+    const now = Date.now();
+    const sourceId = String(frame.sourceId || options.clientId);
+    const masterLevel = typeof frame.level === 'number' ? clampUnit(frame.muted ? 0 : frame.level) : undefined;
+    const updates: Record<string, unknown> = {
+      [`state/audioSources/${safePath(sourceId)}`]: {
+        ...frame,
+        sourceId,
+        timestamp: typeof frame.timestamp === 'number' ? frame.timestamp : now,
+      },
+      'state/modules/audio/activeSourceId': sourceId,
+      'state/updatedAt': now,
+      [`clients/${safePath(options.clientId)}/lastSeen`]: now,
+    };
+    if (typeof masterLevel === 'number') updates['state/modules/audio/masterLevel'] = masterLevel;
+    if (typeof frame.bpm === 'number') {
+      updates['state/modules/audio/bpm'] = Math.max(0, frame.bpm);
+      updates['state/show/bpm'] = Math.max(0, frame.bpm);
+    }
+    if (typeof frame.transport === 'string') updates['state/modules/audio/transport'] = frame.transport;
+    if (typeof frame.activePreset === 'string') updates['state/modules/audio/activePreset'] = frame.activePreset;
+    if (typeof frame.activeStep === 'number') updates['state/modules/audio/activeStep'] = frame.activeStep;
+    await firebasePatch(rootPath, updates);
+  }
 }
 
 function makeClientInfo(options: ClientOptions) {
@@ -304,6 +396,18 @@ async function firebaseWrite(method: 'PUT' | 'PATCH', path: string, value: unkno
 
 function jsonUrl(path: string) {
   return `${databaseUrl}/${path}.json`;
+}
+
+function withQuery(url: string, params: Record<string, string | undefined>) {
+  const next = new URL(url);
+  for (const [key, value] of Object.entries(params)) {
+    if (value) next.searchParams.set(key, value);
+  }
+  return next.toString();
+}
+
+function clampUnit(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function safePath(value: string) {
