@@ -374,7 +374,8 @@ export default function App() {
     syncProjectEngine(nextTab);
   };
 
-  const shuffleActiveTab = () => {
+  const shuffleActiveTab = (tabId = activeTab.id) => {
+    const targetTab = tabs.find(tab => tab.id === tabId) ?? activeTab;
     const pick = (category: string) => {
       const pool = AVAILABLE_SOUNDS.filter(sound => sound.category === category);
       return pool[Math.floor(Math.random() * pool.length)] ?? null;
@@ -404,13 +405,13 @@ export default function App() {
       delay: Math.max(0, Math.min(48, fx.delay + Math.round(Math.random() * 12 - 3))),
     }));
     const nextTab = {
-      ...activeTab,
+      ...targetTab,
       name: `${activeStyle.name} Sketch`,
       slots: nextSlots,
       fxSlots: nextFx,
       masterFx: activeStyle.masterFx,
     };
-    setTabs(prev => prev.map(t => t.id === activeTab.id ? nextTab : t));
+    setTabs(prev => prev.map(t => t.id === targetTab.id ? nextTab : t));
     syncProjectEngine(nextTab);
   };
 
@@ -590,9 +591,13 @@ export default function App() {
     }));
   };
 
+  const setAudioStyleForTab = (tabId: string, styleId: AudioStyleId) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, styleId } : t));
+    engineManager.getProject(tabId).setStyle(styleId);
+  };
+
   const handleStyleChange = (styleId: AudioStyleId) => {
-    setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, styleId } : t));
-    engineManager.getProject(activeTab.id).setStyle(styleId);
+    setAudioStyleForTab(activeTab.id, styleId);
   };
 
   const recordArrangementStart = (tab: TabData) => {
@@ -644,6 +649,16 @@ export default function App() {
     if (parsed >= 1 && parsed <= 7) return parsed - 1;
     if (parsed >= 0 && parsed < 7) return parsed;
     return null;
+  };
+
+  const resolveCommandStyleId = (command: ControlCommand): AudioStyleId | null => {
+    const value = command.value;
+    const styleId = typeof value === 'object' && value && 'styleId' in value
+      ? String((value as { styleId?: unknown }).styleId)
+      : String(value || command.target || '');
+    return ['default', 'club', 'techno', 'synthwave', 'trap', 'chiptune', 'piano', 'experimental'].includes(styleId)
+      ? styleId as AudioStyleId
+      : null;
   };
 
   const setMutedSlotsForControl = (tabId: string, muted: boolean, slotIndex: number | null) => {
@@ -699,6 +714,11 @@ export default function App() {
     } else if (command.command === 'setPreset' && typeof value === 'string') {
       const preset = STYLE_PRESETS.find(style => style.id === value || style.name === value);
       if (preset) applyStylePreset(preset.id, targetTabId);
+    } else if (command.command === 'setStyle' || command.command === 'setAudioStyle') {
+      const styleId = resolveCommandStyleId(command);
+      if (styleId) setAudioStyleForTab(targetTabId, styleId);
+    } else if (command.command === 'shuffleStyle') {
+      shuffleActiveTab(targetTabId);
     } else if (command.command === 'setActiveTab' && typeof value === 'string' && tabs.some(tab => tab.id === value)) {
       setActiveTabId(value);
     } else if (command.command === 'setBpm') {
@@ -737,7 +757,7 @@ export default function App() {
       module: 'audio',
       clientId: showControlClientIdRef.current,
       role: 'dj',
-      capabilities: ['module.statePatch', 'mixer.audioFrame', 'control.command', 'audio.transport', 'audio.presets'],
+      capabilities: ['module.statePatch', 'mixer.audioFrame', 'control.command', 'audio.transport', 'audio.style', 'audio.shuffle'],
       onCommand: (command) => showControlCommandRef.current(command),
       onStatus: setShowControlStatus,
     });
