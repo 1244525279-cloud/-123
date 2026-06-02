@@ -46,7 +46,9 @@ import {
   type ArrangementFilePermissionMode,
   type AudioTransportState,
   type ColorMode,
+  type GlobalHistoryScope,
   type GlobalRecordingState,
+  type GlobalUndoAdapter,
   type MixerAudioTelemetry,
   type PersistedSnapshot,
   type PersistenceSyncMessage,
@@ -56,9 +58,12 @@ import {
   type WindowWithArrangementFilePicker,
 } from './app/model';
 import {
+  collectExportAudioSources,
+  computeExportAudioSampleRate,
   deserializeSoundDef,
-  serializeSoundDef,
+  encodeCompressedAudioAsset,
   serializeSoundDefForPersistence,
+  serializeSoundDefForExport,
   type MusicArrFile,
   type PersistedMainEditorState,
 } from './app/mainPersistence';
@@ -71,6 +76,33 @@ const SampleLibrary = React.lazy(() => import('./components/SampleLibrary').then
 const TimelinePage = React.lazy(() => import('./components/TimelinePage').then(module => ({ default: module.TimelinePage })));
 const WorkbenchControls = React.lazy(() => import('./components/WorkbenchControls').then(module => ({ default: module.WorkbenchControls })));
 const WorkbenchHeader = React.lazy(() => import('./components/WorkbenchHeader').then(module => ({ default: module.WorkbenchHeader })));
+
+interface MainUndoSnapshot {
+  tabs: TabData[];
+  selectedStyleId: string;
+  activeTabId: string;
+  viewMode: ViewMode;
+  bpm: number;
+  recordedSounds: SoundDef[];
+  timelineClips: TimelineClip[];
+  selectedTimelineClipId: string | null;
+  timelinePlayhead: number;
+  timelineDuration: number;
+  timelineLoopRange: { start: number; end: number };
+  keyboardInstrumentMode: string;
+  isKeyboardSustainEnabled: boolean;
+  isKeyboardVisible: boolean;
+  liveFxControls: { speed: number; volume: number; fadeIn: number; fadeOut: number };
+  isExtraLibraryOpen: boolean;
+  openExtraCategories: Record<string, boolean>;
+}
+
+interface GlobalHistoryEntry {
+  scope: GlobalHistoryScope;
+  data: unknown;
+}
+
+const GLOBAL_HISTORY_LIMIT = 20;
 
 export default function App() {
   const [initialWorkbench] = useState(hydrateSavedTabs);
@@ -89,6 +121,7 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState('tab-1');
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
   const activeStyle = STYLE_PRESETS.find((style) => style.id === selectedStyleId) ?? STYLE_PRESETS[0];
+  const hasAnyTabPlaying = tabs.some(tab => tab.isPlaying) || pendingPlayIds.size > 0;
   const beatEnergy = activeTab.isPlaying ? activeStyle.energy[activeTab.activeStep] ?? 0.5 : 0;
   const downbeat = activeTab.activeStep % 4 === 0;
   const sweepPosition = `${(activeTab.activeStep / 15) * 100}%`;
@@ -138,7 +171,7 @@ export default function App() {
     rewindTimeline,
     jumpTimelineToEnd,
     handleTimelineDurationChange,
-  } = useTimelineEditor({ recordedSounds, getSoundById });
+  } = useTimelineEditor({ recordedSounds, getSoundById, onRecordHistory: () => recordGlobalHistory() });
   const [isExtraLibraryOpen, setIsExtraLibraryOpen] = useState(false);
   const [openExtraCategories, setOpenExtraCategories] = useState<Record<string, boolean>>({});
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -159,6 +192,14 @@ export default function App() {
   const isApplyingMainPersistenceRef = useRef(false);
   const lastMainPersistenceUpdateRef = useRef(0);
   const mainQuotaWarningShownRef = useRef(false);
+  const [arrangementFileHandle, setArrangementFileHandle] = useState<ArrangementFileHandle | null>(null);
+  const [arrangementFileName, setArrangementFileName] = useState<string | null>(null);
+  const [isSavingArrangement, setIsSavingArrangement] = useState(false);
+  const globalUndoStackRef = useRef<GlobalHistoryEntry[]>([]);
+  const globalRedoStackRef = useRef<GlobalHistoryEntry[]>([]);
+  const isRestoringGlobalHistoryRef = useRef(false);
+  const djUndoAdapterRef = useRef<GlobalUndoAdapter | null>(null);
+  const [, setGlobalHistoryRevision] = useState(0);
 
   const {
     isKeyboardVisible,
@@ -343,6 +384,154 @@ export default function App() {
     engine.setMasterFxParams(tab.masterFx);
   };
 
+  const cloneSoundForHistory = (sound: SoundDef): SoundDef => ({
+    ...sound,
+    pattern: sound.pattern.map((step) => ({ ...step })),
+  });
+
+  const cloneTabForHistory = (tab: TabData): TabData => ({
+    ...tab,
+    slots: tab.slots.map((slot) => slot ? cloneSoundForHistory(slot) : null),
+    mutedSlots: [...tab.mutedSlots],
+    fxSlots: tab.fxSlots.map((fx) => ({ ...fx })),
+    masterFx: { ...tab.masterFx },
+    isPlaying: false,
+    activeStep: 0,
+  });
+
+  const createMainUndoSnapshot = (): MainUndoSnapshot => ({
+    tabs: tabs.map(cloneTabForHistory),
+    selectedStyleId,
+    activeTabId,
+    viewMode,
+    bpm,
+    recordedSounds: recordedSounds.map(cloneSoundForHistory),
+    timelineClips: timelineClips.map((clip) => ({ ...clip })),
+    selectedTimelineClipId,
+    timelinePlayhead: timelinePlayheadRef.current,
+    timelineDuration,
+    timelineLoopRange: { ...timelineLoopRange },
+    keyboardInstrumentMode,
+    isKeyboardSustainEnabled,
+    isKeyboardVisible,
+    liveFxControls: { ...liveFxControls },
+    isExtraLibraryOpen,
+    openExtraCategories: { ...openExtraCategories },
+  });
+
+  const restoreMainUndoSnapshot = (snapshot: MainUndoSnapshot) => {
+    engineManager.stopAllProjects();
+    stopTimelinePlayback(false);
+    setPendingPlayIds(new Set());
+    setTabs(snapshot.tabs.map(cloneTabForHistory));
+    setSelectedStyleId(snapshot.selectedStyleId);
+    setActiveTabId(snapshot.tabs.some(tab => tab.id === snapshot.activeTabId) ? snapshot.activeTabId : snapshot.tabs[0]?.id ?? 'tab-1');
+    setViewMode(snapshot.viewMode);
+    engineManager.bpm = snapshot.bpm;
+    setBpm(snapshot.bpm);
+    setRecordedSounds(snapshot.recordedSounds.map(cloneSoundForHistory));
+    setTimelineClips(snapshot.timelineClips.map((clip) => ({ ...clip })));
+    setSelectedTimelineClipId(snapshot.selectedTimelineClipId);
+    setTimelinePlayhead(snapshot.timelinePlayhead);
+    timelinePlayheadRef.current = snapshot.timelinePlayhead;
+    timelineOffsetRef.current = snapshot.timelinePlayhead;
+    setTimelineDuration(snapshot.timelineDuration);
+    setTimelineLoopRange({ ...snapshot.timelineLoopRange });
+    setKeyboardInstrumentMode(snapshot.keyboardInstrumentMode);
+    setIsKeyboardSustainEnabled(snapshot.isKeyboardSustainEnabled);
+    setIsKeyboardVisible(snapshot.isKeyboardVisible);
+    setLiveFxControls({ ...snapshot.liveFxControls });
+    setIsExtraLibraryOpen(snapshot.isExtraLibraryOpen);
+    setOpenExtraCategories({ ...snapshot.openExtraCategories });
+    setTimelineDeleteHistory([]);
+    snapshot.tabs.forEach(syncProjectEngine);
+  };
+
+  const registerGlobalUndoAdapter = (adapter: GlobalUndoAdapter | null) => {
+    djUndoAdapterRef.current = adapter;
+  };
+
+  const getCurrentGlobalHistorySnapshot = (scope: GlobalHistoryScope): unknown => {
+    if (scope === 'main') return createMainUndoSnapshot();
+    return djUndoAdapterRef.current?.getSnapshot();
+  };
+
+  const restoreGlobalHistorySnapshot = async (entry: GlobalHistoryEntry) => {
+    if (entry.scope === 'main') {
+      restoreMainUndoSnapshot(entry.data as MainUndoSnapshot);
+      return;
+    }
+    await djUndoAdapterRef.current?.restoreSnapshot(entry.data);
+  };
+
+  const recordGlobalHistory = (scope: GlobalHistoryScope = 'main') => {
+    if (isRestoringGlobalHistoryRef.current) return;
+    const snapshot = getCurrentGlobalHistorySnapshot(scope);
+    if (!snapshot) return;
+    globalUndoStackRef.current = [
+      ...globalUndoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope, data: snapshot },
+    ];
+    globalRedoStackRef.current = [];
+    setGlobalHistoryRevision((revision) => revision + 1);
+  };
+
+  const undoGlobalHistory = async () => {
+    const entry = globalUndoStackRef.current[globalUndoStackRef.current.length - 1];
+    if (!entry) return;
+    const currentSnapshot = getCurrentGlobalHistorySnapshot(entry.scope);
+    if (!currentSnapshot) return;
+    globalUndoStackRef.current = globalUndoStackRef.current.slice(0, -1);
+    globalRedoStackRef.current = [
+      ...globalRedoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope: entry.scope, data: currentSnapshot },
+    ];
+    isRestoringGlobalHistoryRef.current = true;
+    try {
+      await restoreGlobalHistorySnapshot(entry);
+    } finally {
+      isRestoringGlobalHistoryRef.current = false;
+      setGlobalHistoryRevision((revision) => revision + 1);
+    }
+  };
+
+  const redoGlobalHistory = async () => {
+    const entry = globalRedoStackRef.current[globalRedoStackRef.current.length - 1];
+    if (!entry) return;
+    const currentSnapshot = getCurrentGlobalHistorySnapshot(entry.scope);
+    if (!currentSnapshot) return;
+    globalRedoStackRef.current = globalRedoStackRef.current.slice(0, -1);
+    globalUndoStackRef.current = [
+      ...globalUndoStackRef.current.slice(-(GLOBAL_HISTORY_LIMIT - 1)),
+      { scope: entry.scope, data: currentSnapshot },
+    ];
+    isRestoringGlobalHistoryRef.current = true;
+    try {
+      await restoreGlobalHistorySnapshot(entry);
+    } finally {
+      isRestoringGlobalHistoryRef.current = false;
+      setGlobalHistoryRevision((revision) => revision + 1);
+    }
+  };
+
+  useEffect(() => {
+    const handleGlobalHistoryKeydown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const isHistoryShortcut = (event.ctrlKey || event.metaKey) && key === 'z';
+      if (!isHistoryShortcut || event.altKey || event.repeat) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey) {
+        void redoGlobalHistory();
+      } else {
+        void undoGlobalHistory();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalHistoryKeydown, true);
+    return () => window.removeEventListener('keydown', handleGlobalHistoryKeydown, true);
+  }, [undoGlobalHistory, redoGlobalHistory]);
+
   const extraCategories: { id: string; name: string }[] = [];
 
   const navigateAppRoute = (route: AppRoute) => {
@@ -355,6 +544,8 @@ export default function App() {
 
   const applyBpmPreset = (nextBpm: number) => {
     const normalizedBpm = BPM_PRESETS.includes(nextBpm) ? nextBpm : 120;
+    if (normalizedBpm === bpm) return;
+    recordGlobalHistory();
     engineManager.bpm = normalizedBpm;
     setBpm(normalizedBpm);
   };
@@ -362,6 +553,7 @@ export default function App() {
   const applyStylePreset = (styleId: string, tabId = activeTabId) => {
     const preset = STYLE_PRESETS.find((style) => style.id === styleId) ?? STYLE_PRESETS[0];
     const targetTab = tabs.find(tab => tab.id === tabId) ?? activeTab;
+    recordGlobalHistory();
     const styledTab = createStyleTab(preset, targetTab.id, targetTab.styleId);
     const nextTab = {
       ...styledTab,
@@ -376,6 +568,7 @@ export default function App() {
 
   const shuffleActiveTab = (tabId = activeTab.id) => {
     const targetTab = tabs.find(tab => tab.id === tabId) ?? activeTab;
+    recordGlobalHistory();
     const pick = (category: string) => {
       const pool = AVAILABLE_SOUNDS.filter(sound => sound.category === category);
       return pool[Math.floor(Math.random() * pool.length)] ?? null;
@@ -416,6 +609,7 @@ export default function App() {
   };
 
   const reverseActiveTab = () => {
+    recordGlobalHistory();
     const reversedSlots = activeTab.slots.map(slot => {
       if (!slot) return null;
       return {
@@ -432,6 +626,7 @@ export default function App() {
   };
 
   const resetWorkbench = () => {
+    recordGlobalHistory();
     engineManager.stopAllProjects();
     setPendingPlayIds(new Set());
     const fresh = createCodexSongTab();
@@ -457,6 +652,7 @@ export default function App() {
   };
 
   const addNewTab = () => {
+    recordGlobalHistory();
     const newId = `tab-${Date.now()}`;
     const newTab: TabData = {
       ...createStyleTab(activeStyle, newId),
@@ -469,6 +665,7 @@ export default function App() {
 
   const deleteTab = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    recordGlobalHistory();
     engineManager.stopProject(id);
     setPendingPlayIds(prev => {
       const next = new Set(prev);
@@ -521,6 +718,40 @@ export default function App() {
     }
   };
 
+  const toggleGlobalTabPlayback = () => {
+    if (hasAnyTabPlaying) {
+      tabs.forEach(tab => {
+        recordArrangementStop(tab.id);
+        engineManager.stopProject(tab.id);
+      });
+      setPendingPlayIds(new Set());
+      setTabs(prev => prev.map(tab => ({ ...tab, isPlaying: false })));
+      return;
+    }
+
+    const startedIds = new Set<string>();
+    const queuedIds = new Set<string>();
+
+    tabs.forEach(tab => {
+      const engine = engineManager.getProject(tab.id);
+      engine.setStyle(tab.styleId);
+      const startMode = engineManager.startProject(tab.id);
+      recordArrangementStart(tab);
+      if (startMode === 'started') {
+        startedIds.add(tab.id);
+      } else {
+        queuedIds.add(tab.id);
+      }
+    });
+
+    setPendingPlayIds(queuedIds);
+    setTabs(prev => prev.map(tab => (
+      startedIds.has(tab.id)
+        ? { ...tab, isPlaying: true, activeStep: 0 }
+        : tab
+    )));
+  };
+
   const handleModuleMouseEnter = (index: number) => {
     if (activeTab.slots[index]) {
       clearTimeout(fxTimeoutRef.current);
@@ -547,6 +778,7 @@ export default function App() {
 
   const handleFxChange = (key: keyof FxParams, value: number) => {
     if (hoveredFxSlot === null) return;
+    if (activeTab.fxSlots[hoveredFxSlot]?.[key] !== value) recordGlobalHistory();
     
     const newFx = [...activeTab.fxSlots];
     newFx[hoveredFxSlot] = { ...newFx[hoveredFxSlot], [key]: value };
@@ -557,6 +789,8 @@ export default function App() {
 
   const handleMasterFxChange = (key: keyof FxParams, value: number) => {
     if (!hoveredTabFxId) return;
+    const targetTab = tabs.find(t => t.id === hoveredTabFxId);
+    if (targetTab?.masterFx[key] !== value) recordGlobalHistory();
     
     setTabs(prev => prev.map(t => {
       if (t.id === hoveredTabFxId) {
@@ -570,6 +804,7 @@ export default function App() {
 
   const handleResetFx = () => {
     if (hoveredFxSlot === null) return;
+    recordGlobalHistory();
     const resetValues = defaultFx();
     const newFx = [...activeTab.fxSlots];
     newFx[hoveredFxSlot] = resetValues;
@@ -580,6 +815,7 @@ export default function App() {
 
   const handleResetMasterFx = () => {
     if (!hoveredTabFxId) return;
+    recordGlobalHistory();
     const resetValues = defaultFx();
     
     setTabs(prev => prev.map(t => {
@@ -597,6 +833,7 @@ export default function App() {
   };
 
   const handleStyleChange = (styleId: AudioStyleId) => {
+    if (activeTab.styleId !== styleId) recordGlobalHistory();
     setAudioStyleForTab(activeTab.id, styleId);
   };
 
@@ -991,25 +1228,44 @@ export default function App() {
   }, []);
 
 	  const createMusicarrPayload = async (): Promise<MusicArrFile> => {
-    const tabsPayload = await Promise.all(tabs.map(async (tab) => ({
+    const audioSources = collectExportAudioSources([
+      ...recordedSounds,
+      ...tabs.flatMap(tab => tab.slots),
+    ]);
+    const exportSampleRate = computeExportAudioSampleRate([...audioSources.values()]);
+    const audioAssets = [...audioSources.entries()].map(([id, buffer]) => (
+      encodeCompressedAudioAsset(id, buffer, exportSampleRate)
+    ));
+    const audioAssetIds = new Set(audioAssets.map(asset => asset.id));
+
+    const tabsPayload = tabs.map((tab) => ({
       id: tab.id,
       name: tab.name,
-      slots: await Promise.all(tab.slots.map((slot) => slot ? serializeSoundDef(slot) : null)),
+      slots: tab.slots.map((slot) => slot ? serializeSoundDefForExport(slot, audioAssetIds) : null),
       mutedSlots: tab.mutedSlots,
       moduleFx: tab.fxSlots,
       masterFx: tab.masterFx,
       styleId: tab.styleId,
       activeStep: tab.activeStep,
       isPlaying: tab.isPlaying,
-    })));
+    }));
 
-    const recordedPayload = await Promise.all(recordedSounds.map(serializeSoundDef));
+    const recordedPayload = recordedSounds.map(sound => serializeSoundDefForExport(sound, audioAssetIds));
 
     return {
-      version: '1.0',
+      version: '1.1',
       bpm,
       tabs: tabsPayload,
       recordedSounds: recordedPayload,
+      audioAssets,
+      exportCompression: {
+        format: 'split-audio-assets',
+        targetBytes: 10 * 1024 * 1024,
+        audioSampleRate: exportSampleRate,
+        audioBitDepth: 8,
+        audioChannels: 1,
+        assetCount: audioAssets.length,
+      },
       timeline: {
         duration: timelineDuration,
         playhead: timelinePlayheadRef.current,
@@ -1071,7 +1327,7 @@ export default function App() {
 	    isApplyingMainPersistenceRef.current = true;
 	    try {
 	      const data = snapshot.data;
-	      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeSoundDef));
+	      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(sound => deserializeSoundDef(sound)));
 	      const importedTabs = await Promise.all((data.tabs || []).map(async (tab) => ({
 	        id: tab.id,
 	        name: tab.name,
@@ -1248,6 +1504,8 @@ export default function App() {
           ],
         });
         await writeArrangementFile(handle, text);
+        setArrangementFileHandle(handle);
+        setArrangementFileName(handle.name || suggestedName);
         return;
       }
 
@@ -1255,12 +1513,30 @@ export default function App() {
       if (!fallbackName) return;
       const fileName = sanitizeMusicarrFileName(fallbackName);
       downloadMusicarrFile(text, fileName);
+      setArrangementFileHandle(null);
+      setArrangementFileName(fileName);
     } catch (err) {
       if (isPickerAbort(err)) return;
       console.error('Export failed', err);
       alert('导出失败，请重试。');
     } finally {
       setIsExportingArrangement(false);
+    }
+  };
+
+  const handleSaveArrangementFile = async () => {
+    if (!arrangementFileHandle || isSavingArrangement || isExportingArrangement) return;
+    setIsSavingArrangement(true);
+    try {
+      const text = await createMusicarrText();
+      await writeArrangementFile(arrangementFileHandle, text);
+      setArrangementFileName(arrangementFileHandle.name || arrangementFileName);
+    } catch (err) {
+      console.error('Save failed', err);
+      alert('保存失败，请重新导出并选择保存位置。');
+      setArrangementFileHandle(null);
+    } finally {
+      setIsSavingArrangement(false);
     }
   };
 
@@ -1283,11 +1559,15 @@ export default function App() {
 
       engineManager.init();
       engineManager.stopAllProjects();
+      recordGlobalHistory();
       setPendingPlayIds(new Set());
-      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeSoundDef));
+      const audioAssets = new Map((data.audioAssets || []).map(asset => [asset.id, asset]));
+      const audioAssetCache = new Map<string, Promise<AudioBuffer>>();
+      const deserializeImportedSound = (sound: MusicArrFile['recordedSounds'][number]) => deserializeSoundDef(sound, audioAssets, audioAssetCache);
+      const importedRecordedSounds = await Promise.all((data.recordedSounds || []).map(deserializeImportedSound));
       const importedTabs = await Promise.all(data.tabs.map(async (tab) => ({
         ...tab,
-        slots: await Promise.all(tab.slots.map((slot) => slot ? deserializeSoundDef(slot) : null)),
+        slots: await Promise.all(tab.slots.map((slot) => slot ? deserializeImportedSound(slot) : null)),
         fxSlots: tab.moduleFx ?? tab.fxSlots ?? new Array(7).fill(null).map(defaultFx),
         isPlaying: false,
         activeStep: 0,
@@ -1349,6 +1629,7 @@ export default function App() {
 
   const toggleMute = (index: number) => {
     if (!activeTab.slots[index]) return;
+    recordGlobalHistory();
     const newMuted = [...activeTab.mutedSlots];
     newMuted[index] = !newMuted[index];
     
@@ -1371,6 +1652,7 @@ export default function App() {
       let item = AVAILABLE_SOUNDS.find(s => s.id === itemData.id) || recordedSounds.find(s => s.id === itemData.id);
       
       if (!item) return;
+      recordGlobalHistory();
 
       const newSlots = [...activeTab.slots];
       newSlots[slotIndex] = item;
@@ -1399,6 +1681,7 @@ export default function App() {
   };
 
   const deleteRecordedSound = (soundId: string) => {
+    recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     setRecordedSounds(prev => prev.filter(sound => sound.id !== soundId));
     setTimelineClips(prev => prev.filter(clip => clip.soundId !== soundId));
@@ -1410,6 +1693,7 @@ export default function App() {
 
   const clearRecordedSounds = () => {
     if (recordedSounds.length === 0) return;
+    recordGlobalHistory();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     const soundIds = new Set(recordedSounds.map(sound => sound.id));
     setRecordedSounds([]);
@@ -1456,6 +1740,8 @@ export default function App() {
   );
 
   const handleClearSlot = (index: number) => {
+    if (!activeTab.slots[index]) return;
+    recordGlobalHistory();
     const newSlots = [...activeTab.slots];
     newSlots[index] = null;
     setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, slots: newSlots } : t));
@@ -1463,6 +1749,7 @@ export default function App() {
   };
 
   const handleClearActiveTab = () => {
+    recordGlobalHistory();
     const emptySlots = new Array(7).fill(null);
     const mutedSlots = new Array(7).fill(false);
     const fxSlots = new Array(7).fill(null).map(defaultFx);
@@ -1478,6 +1765,7 @@ export default function App() {
 
   const toggleLoopMode = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    recordGlobalHistory();
     setRecordedSounds(prev => prev.map(s => {
       if (s.id !== id) return s;
       const newMode = s.loopMode === 'fast' ? 'full' : 'fast';
@@ -1548,6 +1836,7 @@ export default function App() {
               loopMode: 'full',
               playMode: 'buffer'
             };
+            recordGlobalHistory();
             setRecordedSounds(prev => [...prev, newSound]);
             setViewMode('timeline');
           } catch (err) {
@@ -1697,15 +1986,20 @@ export default function App() {
         tabs={tabs}
         activeTabId={activeTabId}
         pendingPlayIds={pendingPlayIds}
+        hasAnyTabPlaying={hasAnyTabPlaying}
         isDayMode={isDayMode}
         isKeyboardVisible={isKeyboardVisible}
         isExportingArrangement={isExportingArrangement}
+        isSavingArrangement={isSavingArrangement}
+        arrangementFileHandle={arrangementFileHandle}
+        arrangementFileName={arrangementFileName}
         importFileInputRef={importFileInputRef}
         globalRecordingState={globalRecordingState}
         globalRecordTitle={globalRecordTitle}
         globalRecordLabel={globalRecordLabel}
         arrangementEventCount={arrangementEvents.length}
         viewMode={viewMode}
+        onToggleGlobalPlayback={toggleGlobalTabPlayback}
         onActivateTab={setActiveTabId}
         onTabMouseEnter={handleTabMouseEnter}
         onTabMouseLeave={handleTabMouseLeave}
@@ -1713,9 +2007,13 @@ export default function App() {
         onDeleteTab={deleteTab}
         onAddNewTab={addNewTab}
         onExportArrangement={handleExportArrangement}
+        onSaveArrangement={handleSaveArrangementFile}
         onImportArrangement={handleImportArrangement}
         onOpenDj={() => navigateAppRoute('dj')}
-        onOpenKeyboard={() => setIsKeyboardVisible(true)}
+        onOpenKeyboard={() => {
+          if (!isKeyboardVisible) recordGlobalHistory();
+          setIsKeyboardVisible(true);
+        }}
         onClearActiveTab={handleClearActiveTab}
         onGlobalRecordingToggle={handleGlobalRecordingToggle}
         onToggleViewMode={() => setViewMode(prev => prev === 'timeline' ? 'matrix' : 'timeline')}
@@ -1810,19 +2108,35 @@ export default function App() {
           activeLiveFx={activeLiveFx}
           liveFxControls={liveFxControls}
           recordedNotes={recordedNotes}
-          onClose={() => setIsKeyboardVisible(false)}
-          onInstrumentModeChange={setKeyboardInstrumentMode}
+          onClose={() => {
+            if (isKeyboardVisible) recordGlobalHistory();
+            setIsKeyboardVisible(false);
+          }}
+          onInstrumentModeChange={(mode) => {
+            if (mode !== keyboardInstrumentMode) recordGlobalHistory();
+            setKeyboardInstrumentMode(mode);
+          }}
           onToggleKeyboardRecording={isRecordingKeyboard ? stopKeyboardRecording : startKeyboardRecording}
-          onToggleSustain={() => setIsKeyboardSustainEnabled(prev => !prev)}
+          onToggleSustain={() => {
+            recordGlobalHistory();
+            setIsKeyboardSustainEnabled(prev => !prev);
+          }}
           onKeyboardNoteDown={handleKeyboardNoteDown}
           onKeyboardNoteUp={handleKeyboardNoteUp}
-          onLiveFxControlsChange={setLiveFxControls}
+          onLiveFxControlsChange={(update) => {
+            recordGlobalHistory();
+            setLiveFxControls(update);
+          }}
           onTriggerLiveFx={triggerLiveFx}
         />
       </React.Suspense>
     <div className={appRoute === 'dj' ? 'fixed inset-0 z-[100] block' : 'hidden'}>
       <React.Suspense fallback={<div className="flex h-screen items-center justify-center bg-[#08090b] text-[11px] font-bold uppercase tracking-[0.24em] text-zinc-500">Loading DJ editor</div>}>
-        <DJAudioEditorPage onBack={() => navigateAppRoute('main')} />
+        <DJAudioEditorPage
+          onBack={() => navigateAppRoute('main')}
+          onRecordGlobalHistory={recordGlobalHistory}
+          onRegisterGlobalUndoAdapter={registerGlobalUndoAdapter}
+        />
       </React.Suspense>
     </div>
     </>

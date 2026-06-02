@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { engineManager, type SoundDef } from '../audio';
 import {
   DEFAULT_TIMELINE_SECONDS,
@@ -14,9 +14,10 @@ import {
 interface UseTimelineEditorOptions {
   recordedSounds: SoundDef[];
   getSoundById: (id: string) => SoundDef | undefined;
+  onRecordHistory?: () => void;
 }
 
-export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineEditorOptions) {
+export function useTimelineEditor({ recordedSounds, getSoundById, onRecordHistory }: UseTimelineEditorOptions) {
   const [timelineClips, setTimelineClips] = useState<TimelineClip[]>([]);
   const [selectedTimelineClipId, setSelectedTimelineClipId] = useState<string | null>(null);
   const [timelineDeleteHistory, setTimelineDeleteHistory] = useState<TimelineClip[][]>([]);
@@ -88,7 +89,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     return (clientX - rect.left - 80) / PIXELS_PER_SECOND;
   };
 
-  const handleTimelineDrop = (event: React.DragEvent, track: number) => {
+  const handleTimelineDrop = (event: DragEvent, track: number) => {
     event.preventDefault();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const start = snapTime((event.clientX - rect.left) / PIXELS_PER_SECOND, timelineSnapCandidates());
@@ -98,6 +99,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
       const itemData = JSON.parse(data) as SoundDef;
       const item = getSoundById(itemData.id);
       if (!item) return;
+      onRecordHistory?.();
       const duration = Math.min(timelineDuration, 8, Math.max(1.5, item.buffer?.duration ?? 4));
       setTimelineClips(prev => [
         ...prev,
@@ -118,6 +120,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
   const duplicateTimelineClip = (clipId: string) => {
     const clip = timelineClips.find(item => item.id === clipId);
     if (!clip) return;
+    onRecordHistory?.();
     setTimelineClips(prev => [
       ...prev,
       {
@@ -130,6 +133,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
   };
 
   const cropTimelineClip = (clipId: string, edge: 'left' | 'right', amount: number) => {
+    if (timelineClips.some(clip => clip.id === clipId)) onRecordHistory?.();
     setTimelineClips(prev => prev.map(clip => {
       if (clip.id !== clipId) return clip;
       if (edge === 'left') {
@@ -175,6 +179,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     if (!selectedTimelineClipId) return;
     const clip = timelineClips.find(item => item.id === selectedTimelineClipId);
     if (!clip) return;
+    onRecordHistory?.();
     if (isTimelinePlaying) stopTimelinePlayback(false);
     setTimelineDeleteHistory(prev => [...prev.slice(-19), [clip]]);
     setTimelineClips(prev => prev.filter(item => item.id !== selectedTimelineClipId));
@@ -184,6 +189,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
   const undoTimelineDelete = () => {
     const restored = timelineDeleteHistory[timelineDeleteHistory.length - 1];
     if (!restored?.length) return;
+    onRecordHistory?.();
     setTimelineClips(current => {
       const currentIds = new Set(current.map(clip => clip.id));
       return [...current, ...restored.filter(clip => !currentIds.has(clip.id))]
@@ -193,7 +199,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     setTimelineDeleteHistory(prev => prev.slice(0, -1));
   };
 
-  const beginTimelineEdit = (event: React.PointerEvent, clip: TimelineClip, mode: TimelinePointerEdit['mode']) => {
+  const beginTimelineEdit = (event: ReactPointerEvent, clip: TimelineClip, mode: TimelinePointerEdit['mode']) => {
     event.stopPropagation();
     event.preventDefault();
     setSelectedTimelineClipId(clip.id);
@@ -210,7 +216,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   };
 
-  const beginTimelineTransportEdit = (event: React.PointerEvent, mode: TimelineTransportEdit['mode']) => {
+  const beginTimelineTransportEdit = (event: ReactPointerEvent, mode: TimelineTransportEdit['mode']) => {
     event.stopPropagation();
     event.preventDefault();
     if (mode === 'playhead' && isTimelinePlaying) {
@@ -287,7 +293,7 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     timelineAnimationRef.current = requestAnimationFrame(animate);
   };
 
-  const handleTimelineSurfacePointerDown = (event: React.PointerEvent) => {
+  const handleTimelineSurfacePointerDown = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     const wasPlaying = isTimelinePlaying;
     if (wasPlaying) stopTimelinePlayback(false);
@@ -311,11 +317,13 @@ export function useTimelineEditor({ recordedSounds, getSoundById }: UseTimelineE
     setTimelinePlayhead(timelineDuration);
   };
 
-  const handleTimelineDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTimelineDurationChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = Number(event.target.value);
     if (!Number.isFinite(next)) return;
+    const normalized = Math.max(1, Math.min(600, next));
+    if (normalized !== timelineDuration) onRecordHistory?.();
     if (isTimelinePlaying) stopTimelinePlayback(false);
-    setTimelineDuration(Math.max(1, Math.min(600, next)));
+    setTimelineDuration(normalized);
   };
 
   useEffect(() => {

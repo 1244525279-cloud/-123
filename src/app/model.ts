@@ -142,6 +142,12 @@ export interface StylePreset {
 export type ColorMode = 'night' | 'day';
 export type AudioTransportState = 'stopped' | 'playing' | 'paused';
 export type ArrangementFilePermissionMode = 'read' | 'readwrite';
+export type GlobalHistoryScope = 'main' | 'dj';
+
+export interface GlobalUndoAdapter {
+  getSnapshot: () => unknown;
+  restoreSnapshot: (snapshot: unknown) => void | Promise<void>;
+}
 
 export interface ArrangementFileWritable {
   write: (data: Blob | BufferSource | string) => Promise<void>;

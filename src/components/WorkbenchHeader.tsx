@@ -1,4 +1,4 @@
-import { Circle, Disc3, Keyboard, ListMusic, Play, Plus, SkipBack, Square, Trash2, X } from 'lucide-react';
+import { Circle, Disc3, Keyboard, ListMusic, Pause, Play, Plus, Save, SkipBack, Square, Trash2, X } from 'lucide-react';
 import type React from 'react';
 import { cn } from '../lib/utils';
 import type { GlobalRecordingState, TabData, ViewMode } from '../app/model';
@@ -7,15 +7,20 @@ interface WorkbenchHeaderProps {
   tabs: TabData[];
   activeTabId: string;
   pendingPlayIds: Set<string>;
+  hasAnyTabPlaying: boolean;
   isDayMode: boolean;
   isKeyboardVisible: boolean;
   isExportingArrangement: boolean;
+  isSavingArrangement: boolean;
+  arrangementFileHandle: { name: string } | null;
+  arrangementFileName: string | null;
   importFileInputRef: React.RefObject<HTMLInputElement | null>;
   globalRecordingState: GlobalRecordingState;
   globalRecordTitle: string;
   globalRecordLabel: string | number;
   arrangementEventCount: number;
   viewMode: ViewMode;
+  onToggleGlobalPlayback: () => void;
   onActivateTab: (tabId: string) => void;
   onTabMouseEnter: (tabId: string) => void;
   onTabMouseLeave: () => void;
@@ -23,6 +28,7 @@ interface WorkbenchHeaderProps {
   onDeleteTab: (event: React.MouseEvent<HTMLButtonElement>, tabId: string) => void;
   onAddNewTab: () => void;
   onExportArrangement: () => void;
+  onSaveArrangement: () => void;
   onImportArrangement: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onOpenDj: () => void;
   onOpenKeyboard: () => void;
@@ -35,15 +41,20 @@ export function WorkbenchHeader({
   tabs,
   activeTabId,
   pendingPlayIds,
+  hasAnyTabPlaying,
   isDayMode,
   isKeyboardVisible,
   isExportingArrangement,
+  isSavingArrangement,
+  arrangementFileHandle,
+  arrangementFileName,
   importFileInputRef,
   globalRecordingState,
   globalRecordTitle,
   globalRecordLabel,
   arrangementEventCount,
   viewMode,
+  onToggleGlobalPlayback,
   onActivateTab,
   onTabMouseEnter,
   onTabMouseLeave,
@@ -51,6 +62,7 @@ export function WorkbenchHeader({
   onDeleteTab,
   onAddNewTab,
   onExportArrangement,
+  onSaveArrangement,
   onImportArrangement,
   onOpenDj,
   onOpenKeyboard,
@@ -66,6 +78,24 @@ export function WorkbenchHeader({
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none pb-0">
+        <button
+          onClick={onToggleGlobalPlayback}
+          aria-label={hasAnyTabPlaying ? 'Pause all tabs' : 'Play all tabs'}
+          title={hasAnyTabPlaying ? 'Pause all tabs' : 'Play all tabs'}
+          className={cn(
+            'mb-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-all shadow-sm',
+            hasAnyTabPlaying
+              ? 'border-emerald-300/60 bg-emerald-500 text-white shadow-[0_0_18px_rgba(16,185,129,0.28)]'
+              : isDayMode
+                ? 'border-slate-900/10 bg-slate-900 text-white hover:bg-slate-700'
+                : 'border-white/10 bg-white text-zinc-950 hover:bg-zinc-200',
+          )}
+        >
+          {hasAnyTabPlaying
+            ? <Pause className="h-4 w-4" fill="currentColor" />
+            : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}
+        </button>
+
         {tabs.map((tab) => {
           const isQueued = pendingPlayIds.has(tab.id);
           return (
@@ -145,6 +175,20 @@ export function WorkbenchHeader({
           )}
         >
           {isExportingArrangement ? 'Exporting' : 'Export'}
+        </button>
+        <button
+          onClick={onSaveArrangement}
+          disabled={!arrangementFileHandle || isSavingArrangement || isExportingArrangement}
+          title={arrangementFileHandle ? `Save to ${arrangementFileName || arrangementFileHandle.name}` : 'Export once before Save is available'}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-[9px] font-bold uppercase tracking-widest transition-all',
+            !arrangementFileHandle || isSavingArrangement || isExportingArrangement
+              ? 'cursor-not-allowed bg-white/[0.03] text-zinc-700'
+              : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 hover:text-emerald-100',
+          )}
+        >
+          <Save size={11} strokeWidth={2.5} />
+          {isSavingArrangement ? 'Saving' : 'Save'}
         </button>
         <button
           onClick={() => importFileInputRef.current?.click()}

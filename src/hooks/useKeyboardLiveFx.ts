@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { engineManager, type SoundDef } from '../audio';
 import {
   FLAT_KEYBOARD_NOTES,
@@ -12,7 +12,7 @@ import {
 
 interface UseKeyboardLiveFxOptions {
   recordedSounds: SoundDef[];
-  setRecordedSounds: React.Dispatch<React.SetStateAction<SoundDef[]>>;
+  setRecordedSounds: Dispatch<SetStateAction<SoundDef[]>>;
 }
 
 export function useKeyboardLiveFx({ recordedSounds, setRecordedSounds }: UseKeyboardLiveFxOptions) {

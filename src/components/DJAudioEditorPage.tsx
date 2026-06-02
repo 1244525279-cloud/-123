@@ -19,6 +19,8 @@ import {
   makeFx,
   readPersistedSnapshot,
   writePersistedSnapshot,
+  type GlobalHistoryScope,
+  type GlobalUndoAdapter,
   type PersistedDJState,
   type PersistedDJTrack,
   type PersistedSnapshot,
@@ -26,7 +28,13 @@ import {
   type ScratchEdit,
 } from '../app/model';
 
-export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
+interface DJAudioEditorPageProps {
+  onBack: () => void;
+  onRecordGlobalHistory: (scope: GlobalHistoryScope) => void;
+  onRegisterGlobalUndoAdapter: (adapter: GlobalUndoAdapter | null) => void;
+}
+
+export function DJAudioEditorPage({ onBack, onRecordGlobalHistory, onRegisterGlobalUndoAdapter }: DJAudioEditorPageProps) {
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [djTracks, setDjTracks] = useState<PersistedDJTrack[]>([]);
   const [activeTrackId, setActiveTrackId] = useState<string | null>(null);
@@ -161,6 +169,18 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     fx: djFx,
   });
 
+  const createDjUndoSnapshot = () => createDjPersistenceData(true);
+
+  const restoreDjUndoSnapshot = async (snapshot: unknown) => {
+    await applyDjPersistedState({
+      version: PERSISTENCE_STATE_VERSION,
+      updatedAt: Date.now(),
+      data: snapshot as PersistedDJState,
+    });
+  };
+
+  const recordDjHistory = () => onRecordGlobalHistory('dj');
+
   const persistDjState = async (includeAudio = true) => {
     if (!hasHydratedPersistenceRef.current || isApplyingPersistenceRef.current) return;
     const updatedAt = Date.now();
@@ -251,6 +271,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const resetDjEditorState = async (emit = true) => {
+    if (emit) recordDjHistory();
     pauseDjPlayback();
     audioBufferRef.current = null;
     djTracksRef.current = [];
@@ -359,6 +380,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     const tracks = djTracksRef.current;
     const removeIndex = tracks.findIndex((track) => track.id === trackId);
     if (removeIndex === -1) return;
+    recordDjHistory();
     const nextTracks = tracks.filter((track) => track.id !== trackId);
     djTracksRef.current = nextTracks;
     setDjTracks(nextTracks);
@@ -383,6 +405,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
 
   const reorderDjTrack = (draggedId: string, targetId: string, placement: 'before' | 'after' = 'before') => {
     if (draggedId === targetId) return;
+    recordDjHistory();
     setDjTracks((current) => {
       const fromIndex = current.findIndex((track) => track.id === draggedId);
       const toIndex = current.findIndex((track) => track.id === targetId);
@@ -500,6 +523,10 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
         }
       }
 
+      if (nextTracks.length > 0) {
+        recordDjHistory();
+      }
+
       setDjTracks((current) => {
         const merged = [...current, ...nextTracks];
         djTracksRef.current = merged;
@@ -527,6 +554,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleSpeedChange = (next: number) => {
+    if (Math.abs(next - speedRef.current) >= 0.001) recordDjHistory();
     anchorLivePlayback();
     speedRef.current = next;
     setPlaybackSpeed(next);
@@ -534,6 +562,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleBpmChange = (next: number) => {
+    if (next !== djBpm) recordDjHistory();
     setDjBpm(next);
     const channel = channelRef.current;
     const ctx = ctxRef.current;
@@ -543,6 +572,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleFxChange = (key: keyof FxParams, value: number) => {
+    if (fxRef.current[key] !== value) recordDjHistory();
     if (key === 'pitch') anchorLivePlayback();
     const next = { ...fxRef.current, [key]: value };
     fxRef.current = next;
@@ -552,6 +582,7 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
   };
 
   const toggleReversePlayback = () => {
+    recordDjHistory();
     const wasPlaying = isPlayingRef.current;
     const live = getLivePosition();
     stopCurrentSource();
@@ -675,6 +706,14 @@ export function DJAudioEditorPage({ onBack }: { onBack: () => void }) {
     speedRef.current = playbackSpeed;
     updateSourceRate();
   }, [playbackSpeed]);
+
+  useEffect(() => {
+    onRegisterGlobalUndoAdapter({
+      getSnapshot: createDjUndoSnapshot,
+      restoreSnapshot: restoreDjUndoSnapshot,
+    });
+    return () => onRegisterGlobalUndoAdapter(null);
+  }, [onRegisterGlobalUndoAdapter, djTracks, activeTrackId, djPosition, isReverse, djBpm, playbackSpeed, djFx]);
 
   useEffect(() => {
     fxRef.current = djFx;
