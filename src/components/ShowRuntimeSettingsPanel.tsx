@@ -37,7 +37,6 @@ export function ShowRuntimeSettingsPanel({ status, clientIdRequired = false }: P
             <select className="mt-1 w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-xs" value={settings.transport} onChange={(event) => update('transport', event.target.value)}>
               <option value="websocket">websocket</option>
               <option value="cloudflare">cloudflare</option>
-              <option value="firebase">firebase</option>
               <option value="auto">auto</option>
             </select>
           </label>
@@ -47,7 +46,6 @@ export function ShowRuntimeSettingsPanel({ status, clientIdRequired = false }: P
             ['showId', 'Show ID'],
             ['controlToken', 'Control Token'],
             ['clientId', clientIdRequired ? 'DJ Client ID' : 'Client ID'],
-            ['firebaseDatabaseUrl', 'Firebase Database URL'],
           ] as Array<[keyof ShowRuntimeSettings, string]>).map(([key, label]) => (
             <label key={key} className="mb-2 block">
               <span className="text-[9px] uppercase tracking-widest text-zinc-500">{label}</span>
