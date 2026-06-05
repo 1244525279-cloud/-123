@@ -69,11 +69,10 @@ export function createShowControlClient(options: ClientOptions): ShowControlClie
     options.onError?.('Control token is required before show control can connect');
     return createDisabledClient();
   }
-  if (shouldUseFirebase()) {
-    if ((transport === 'websocket' || transport === 'cloudflare') && databaseUrl) {
-      options.onError?.(`WebSocket URL ${wsUrl || '(empty)'} is not usable from this page; falling back to Firebase`);
-    }
-    return createFirebaseClient(options);
+  if (!isUsableWebSocketUrl()) {
+    options.onStatus?.('offline');
+    options.onError?.(`WebSocket URL ${wsUrl || '(empty)'} is not usable from this page`);
+    return createDisabledClient();
   }
   return createWebSocketClient(options);
 }
@@ -96,10 +95,7 @@ function createDisabledClient(): ShowControlClient {
 }
 
 function shouldUseFirebase() {
-  if (transport === 'firebase') return Boolean(databaseUrl);
-  if (transport === 'websocket' || transport === 'cloudflare') return !isUsableWebSocketUrl() && Boolean(databaseUrl);
-  if (isUsableWebSocketUrl()) return false;
-  return Boolean(databaseUrl);
+  return false;
 }
 
 function isUsableWebSocketUrl() {
